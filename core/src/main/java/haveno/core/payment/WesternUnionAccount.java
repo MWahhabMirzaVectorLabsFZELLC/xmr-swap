@@ -1,0 +1,105 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.payment;
+
+import haveno.core.api.model.PaymentAccountFormField;
+import haveno.core.locale.CurrencyUtil;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.payment.payload.PaymentAccountPayload;
+import haveno.core.payment.payload.PaymentMethod;
+import haveno.core.payment.payload.WesternUnionAccountPayload;
+import lombok.NonNull;
+
+import java.util.List;
+
+public final class WesternUnionAccount extends CountryBasedPaymentAccount {
+
+    public static final List<TradeCurrency> SUPPORTED_CURRENCIES = CurrencyUtil.getAllFiatCurrencies();
+
+    private static final List<PaymentAccountFormField.FieldId> INPUT_FIELD_IDS = List.of(
+            PaymentAccountFormField.FieldId.COUNTRY,
+            PaymentAccountFormField.FieldId.HOLDER_NAME,
+            PaymentAccountFormField.FieldId.CITY,
+            PaymentAccountFormField.FieldId.STATE,
+            PaymentAccountFormField.FieldId.EMAIL,
+            PaymentAccountFormField.FieldId.TRADE_CURRENCIES,
+            PaymentAccountFormField.FieldId.ACCOUNT_NAME,
+            PaymentAccountFormField.FieldId.SALT
+    );
+
+    public WesternUnionAccount() {
+        super(PaymentMethod.WESTERN_UNION);
+    }
+
+    @Override
+    protected PaymentAccountPayload createPayload() {
+        return new WesternUnionAccountPayload(paymentMethod.getId(), id);
+    }
+
+    @Override
+    public @NonNull List<TradeCurrency> getSupportedCurrencies() {
+        return SUPPORTED_CURRENCIES;
+    }
+
+    @Override
+    public @NonNull List<PaymentAccountFormField.FieldId> getInputFieldIds() {
+        return INPUT_FIELD_IDS;
+    }
+
+    @Override
+    protected PaymentAccountFormField getEmptyFormField(PaymentAccountFormField.FieldId fieldId) {
+        PaymentAccountFormField field = super.getEmptyFormField(fieldId);
+        if (field.getId() == PaymentAccountFormField.FieldId.TRADE_CURRENCIES) {
+            field.setComponent(PaymentAccountFormField.Component.SELECT_ONE);
+            if (getSupportedCurrencies().size() > 1) field.setValue(""); // SELECT_ONE must not pre-fill the whole currency list
+        }
+        return field;
+    }
+
+    public String getEmail() {
+        return ((WesternUnionAccountPayload) paymentAccountPayload).getEmail();
+    }
+
+    public void setEmail(String email) {
+        ((WesternUnionAccountPayload) paymentAccountPayload).setEmail(email);
+    }
+
+    public String getFullName() {
+        return ((WesternUnionAccountPayload) paymentAccountPayload).getHolderName();
+    }
+
+    public void setFullName(String email) {
+        ((WesternUnionAccountPayload) paymentAccountPayload).setHolderName(email);
+    }
+
+    public String getCity() {
+        return ((WesternUnionAccountPayload) paymentAccountPayload).getCity();
+    }
+
+    public void setCity(String email) {
+        ((WesternUnionAccountPayload) paymentAccountPayload).setCity(email);
+    }
+
+    public String getState() {
+        return ((WesternUnionAccountPayload) paymentAccountPayload).getState();
+    }
+
+    public void setState(String email) {
+        ((WesternUnionAccountPayload) paymentAccountPayload).setState(email);
+    }
+}

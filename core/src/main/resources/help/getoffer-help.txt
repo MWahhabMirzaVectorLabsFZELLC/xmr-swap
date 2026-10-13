@@ -1,0 +1,24 @@
+getoffer
+
+NAME
+----
+getoffer - get an offer
+
+SYNOPSIS
+--------
+getoffer
+		--offer-id=<value>
+
+DESCRIPTION
+-----------
+Returns the offer with the given id.
+
+OPTIONS
+-------
+--offer-id
+		The id of the offer.
+
+EXAMPLES
+--------
+Get an offer:
+$ ./haveno-cli --password=xyz --port=9998 getoffer --offer-id=<offer-id>

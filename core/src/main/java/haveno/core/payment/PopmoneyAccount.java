@@ -1,0 +1,96 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.payment;
+
+import haveno.core.api.model.PaymentAccountFormField;
+import haveno.core.locale.Country;
+import haveno.core.locale.CountryUtil;
+import haveno.core.locale.Res;
+import haveno.core.locale.TraditionalCurrency;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.payment.payload.PaymentAccountPayload;
+import haveno.core.payment.payload.PaymentMethod;
+import haveno.core.payment.payload.PopmoneyAccountPayload;
+import lombok.EqualsAndHashCode;
+import lombok.NonNull;
+
+import java.util.List;
+import javax.annotation.Nullable;
+
+//TODO missing support for selected trade currency
+@EqualsAndHashCode(callSuper = true)
+public final class PopmoneyAccount extends PaymentAccount {
+
+    public static final List<TradeCurrency> SUPPORTED_CURRENCIES = List.of(new TraditionalCurrency("USD"));
+
+    private static final List<PaymentAccountFormField.FieldId> INPUT_FIELD_IDS = List.of(
+            PaymentAccountFormField.FieldId.HOLDER_NAME,
+            PaymentAccountFormField.FieldId.ACCOUNT_ID,
+            PaymentAccountFormField.FieldId.ACCOUNT_NAME,
+            PaymentAccountFormField.FieldId.SALT
+    );
+
+    public PopmoneyAccount() {
+        super(PaymentMethod.POPMONEY);
+        setSingleTradeCurrency(SUPPORTED_CURRENCIES.get(0));
+    }
+
+    @Override
+    protected PaymentAccountPayload createPayload() {
+        return new PopmoneyAccountPayload(paymentMethod.getId(), id);
+    }
+
+    @Override
+    public @NonNull List<TradeCurrency> getSupportedCurrencies() {
+        return SUPPORTED_CURRENCIES;
+    }
+
+    @Override
+    @Nullable
+    public List<Country> getSupportedCountries() {
+        return List.of(CountryUtil.findCountryByCode("US").get());
+    }
+
+    @Override
+    public @NonNull List<PaymentAccountFormField.FieldId> getInputFieldIds() {
+        return INPUT_FIELD_IDS;
+    }
+
+    @Override
+    protected PaymentAccountFormField getEmptyFormField(PaymentAccountFormField.FieldId fieldId) {
+        PaymentAccountFormField field = super.getEmptyFormField(fieldId);
+        if (field.getId() == PaymentAccountFormField.FieldId.ACCOUNT_ID) field.setLabel(Res.get("payment.popmoney.accountId"));
+        return field;
+    }
+
+    public void setAccountId(String accountId) {
+        ((PopmoneyAccountPayload) paymentAccountPayload).setAccountId(accountId);
+    }
+
+    public String getAccountId() {
+        return ((PopmoneyAccountPayload) paymentAccountPayload).getAccountId();
+    }
+
+    public void setHolderName(String holderName) {
+        ((PopmoneyAccountPayload) paymentAccountPayload).setHolderName(holderName);
+    }
+
+    public String getHolderName() {
+        return ((PopmoneyAccountPayload) paymentAccountPayload).getHolderName();
+    }
+}

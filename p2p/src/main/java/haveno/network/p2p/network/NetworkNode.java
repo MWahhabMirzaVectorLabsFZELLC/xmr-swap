@@ -1,0 +1,560 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.network.p2p.network;
+
+import haveno.network.p2p.NodeAddress;
+
+import haveno.common.Timer;
+import haveno.common.UserThread;
+import haveno.common.app.Capabilities;
+import haveno.common.handlers.ErrorMessageHandler;
+import haveno.common.proto.network.NetworkEnvelope;
+import haveno.common.proto.network.NetworkProtoResolver;
+import haveno.common.util.Utilities;
+
+import com.runjva.sourceforge.jsocks.protocol.Socks5Proxy;
+
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.SettableFuture;
+
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
+import lombok.Getter;
+
+import java.net.ServerSocket;
+import java.net.Socket;
+
+import java.io.IOException;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import static com.google.common.base.Preconditions.checkNotNull;
+
+// Run in UserThread
+public abstract class NetworkNode implements MessageListener {
+    private static final Logger log = LoggerFactory.getLogger(NetworkNode.class);
+    static final int CREATE_SOCKET_TIMEOUT = (int) TimeUnit.SECONDS.toMillis(120);
+    private static final long REJECTION_LOG_INTERVAL_MS = TimeUnit.SECONDS.toMillis(30);
+
+    final int servicePort;
+    private final NetworkProtoResolver networkProtoResolver;
+    @Nullable
+    private final BanFilter banFilter;
+
+    private final Set<InboundConnection> inBoundConnections = Collections.newSetFromMap(new ConcurrentHashMap<InboundConnection, Boolean>());
+    private final Set<MessageListener> messageListeners = Collections.newSetFromMap(new ConcurrentHashMap<MessageListener, Boolean>());
+    private final Set<ConnectionListener> connectionListeners = Collections.newSetFromMap(new ConcurrentHashMap<ConnectionListener, Boolean>());
+    final Set<SetupListener> setupListeners = Collections.newSetFromMap(new ConcurrentHashMap<SetupListener, Boolean>());
+    private final ListeningExecutorService connectionExecutor;
+    private final ListeningExecutorService sendMessageExecutor;
+    private final AtomicLong lastRejectionLogTs = new AtomicLong();
+    private final AtomicInteger suppressedRejectionLogs = new AtomicInteger();
+    private Server server;
+
+    @Getter
+    private volatile boolean isShutDownStarted;
+    // accessed from different threads
+    private final Set<OutboundConnection> outBoundConnections = Collections.newSetFromMap(new ConcurrentHashMap<OutboundConnection, Boolean>());
+    protected final ObjectProperty<NodeAddress> nodeAddressProperty = new SimpleObjectProperty<>();
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    NetworkNode(int servicePort,
+            NetworkProtoResolver networkProtoResolver,
+            @Nullable BanFilter banFilter,
+            int maxConnections) {
+        this.servicePort = servicePort;
+        this.networkProtoResolver = networkProtoResolver;
+        this.banFilter = banFilter;
+
+        connectionExecutor = Utilities.getListeningExecutorService("NetworkNode.connection",
+                maxConnections * 2,
+                maxConnections * 3,
+                50,
+                30);
+        sendMessageExecutor = Utilities.getListeningExecutorService("NetworkNode.sendMessage",
+                maxConnections * 2,
+                maxConnections * 3,
+                30,
+                30);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // API
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    // Calls this (and other registered) setup listener's ``onTorNodeReady()`` and ``onHiddenServicePublished``
+    // when the events happen.
+    public abstract void start(@Nullable SetupListener setupListener);
+
+    public SettableFuture<Connection> sendMessage(@NotNull NodeAddress peersNodeAddress,
+            NetworkEnvelope networkEnvelope) {
+        return sendMessage(peersNodeAddress, networkEnvelope, null);
+    }
+
+    public SettableFuture<Connection> sendMessage(@NotNull NodeAddress peersNodeAddress,
+            NetworkEnvelope networkEnvelope, Integer timeoutSeconds) {
+        log.debug("Send {} to {}", networkEnvelope.getClass().getSimpleName(), peersNodeAddress);
+
+        checkNotNull(peersNodeAddress, "peerAddress must not be null");
+
+        Connection connection = getConnection(peersNodeAddress);
+        if (connection != null) {
+            return sendMessage(connection, networkEnvelope);
+        } else {
+            log.debug("We have not found any connection for peerAddress {}.\n\t" +
+                    "We will create a new outbound connection.", peersNodeAddress);
+
+            SettableFuture<Connection> resultFuture = SettableFuture.create(); 
+            CompletableFuture<Connection> future = CompletableFuture.supplyAsync(() -> {
+                try {
+                    Thread.currentThread().setName("NetworkNode.connectionExecutor:SendMessage-to-"
+                            + Utilities.toTruncatedString(peersNodeAddress.getFullAddress(), 15));
+                    if (peersNodeAddress.equals(getNodeAddress())) {
+                        log.warn("We are sending a message to ourselves");
+                    }
+
+                    OutboundConnection outboundConnection;
+                    // can take a while when using tor
+                    long startTs = System.currentTimeMillis();
+
+                    log.debug("Start create socket to peersNodeAddress {}", peersNodeAddress.getFullAddress());
+
+                    Socket socket = createSocket(peersNodeAddress);
+                    long duration = System.currentTimeMillis() - startTs;
+                    log.info("Socket creation to peersNodeAddress {} took {} ms", peersNodeAddress.getFullAddress(),
+                            duration);
+
+                    if (duration > CREATE_SOCKET_TIMEOUT)
+                        throw new TimeoutException("A timeout occurred when creating a socket.");
+
+                    // Tor needs sometimes quite long to create a connection. To avoid that we get too many
+                    // connections with the same peer we check again if we still don't have any connection for that node address.
+                    Connection existingConnection = getConnection(peersNodeAddress);
+                    if (existingConnection != null) {
+                        log.debug("We found in the meantime a connection for peersNodeAddress {}, " +
+                                "so we use that for sending the message.\n" +
+                                "That can happen if Tor needs long for creating a new outbound connection.\n" +
+                                "We might have got a new inbound or outbound connection.",
+                                peersNodeAddress.getFullAddress());
+
+                        try {
+                            socket.close();
+                        } catch (Throwable throwable) {
+                            if (!isShutDownStarted) {
+                                log.error("Error at closing socket " + throwable);
+                            }
+                        }
+                        existingConnection.sendMessage(networkEnvelope);
+                        return existingConnection;
+                    } else {
+                        ConnectionListener connectionListener = new ConnectionListener() {
+                            @Override
+                            public void onConnection(Connection connection) {
+                                if (!connection.isStopped()) {
+                                    outBoundConnections.add((OutboundConnection) connection);
+                                    printOutBoundConnections();
+                                    connectionListeners.forEach(e -> e.onConnection(connection));
+                                }
+                            }
+
+                            @Override
+                            public void onDisconnect(CloseConnectionReason closeConnectionReason,
+                                    Connection connection) {
+                                // noinspection SuspiciousMethodCalls
+                                outBoundConnections.remove(connection);
+                                printOutBoundConnections();
+                                connectionListeners.forEach(e -> e.onDisconnect(closeConnectionReason, connection));
+                            }
+                        };
+                        outboundConnection = new OutboundConnection(socket,
+                                NetworkNode.this,
+                                connectionListener,
+                                peersNodeAddress,
+                                networkProtoResolver,
+                                banFilter);
+
+                        if (log.isDebugEnabled()) {
+                            log.debug("\n\n%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n" +
+                                    "NetworkNode created new outbound connection:"
+                                    + "\nmyNodeAddress=" + getNodeAddress()
+                                    + "\npeersNodeAddress=" + peersNodeAddress
+                                    + "\nuid=" + outboundConnection.getUid()
+                                    + "\nmessage=" + networkEnvelope
+                                    + "\n%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n");
+                        }
+                        // can take a while when using tor
+                        outboundConnection.sendMessage(networkEnvelope);
+                        return outboundConnection;
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, connectionExecutor);
+
+            // handle future with timeout
+            if (timeoutSeconds != null) future.orTimeout(timeoutSeconds, TimeUnit.SECONDS);
+            future.exceptionally(throwable -> {
+                log.debug("onFailure at sendMessage: peersNodeAddress={}\n\tmessage={}\n\tthrowable={}", peersNodeAddress, networkEnvelope.getClass().getSimpleName(), throwable.toString());
+                UserThread.execute(() -> {
+                    if (!resultFuture.setException(throwable)) {
+                        // In case the setException returns false we need to cancel the future.
+                        resultFuture.cancel(true);
+                    }
+                });
+                return null;
+            });
+            future.thenAccept(resultFuture::set);
+
+            return resultFuture;
+        }
+    }
+
+    @Nullable
+    private Connection getConnection(@NotNull NodeAddress peersNodeAddress) {
+        return getConnections(peersNodeAddress)
+                .filter(connection -> {
+                    if (!connection.isStopped()) return true;
+                    log.warn("We have a connection which is already stopped. Connection.uid=" + connection.getUid());
+                    inBoundConnections.remove(connection);
+                    outBoundConnections.remove(connection);
+                    return false;
+                })
+                .max(Comparator.comparingLong(connection -> connection.getStatistic().getLastReceivedMessageTimestamp())) // local writes do not prove the peer is responsive
+                .orElse(null);
+    }
+
+    private Stream<Connection> getConnections(@NotNull NodeAddress peersNodeAddress) {
+        return getAllConnections().stream()
+                .filter(connection -> connection.hasPeersNodeAddress() &&
+                        peersNodeAddress.equals(connection.getPeersNodeAddressOptional().get()));
+    }
+
+    @Nullable
+    public Socks5Proxy getSocksProxy() {
+        return null;
+    }
+
+    public SettableFuture<Connection> sendMessage(Connection connection, NetworkEnvelope networkEnvelope) {
+        return sendMessage(connection, networkEnvelope, sendMessageExecutor);
+    }
+
+    public SettableFuture<Connection> sendMessage(Connection connection,
+            NetworkEnvelope networkEnvelope,
+            ListeningExecutorService executor) {
+        SettableFuture<Connection> resultFuture = SettableFuture.create();
+        try {
+            ListenableFuture<Connection> future = executor.submit(() -> {
+                String id = connection.getPeersNodeAddressOptional().isPresent() ? connection.getPeersNodeAddressOptional().get().getFullAddress() : connection.getUid();
+                Thread.currentThread().setName("NetworkNode:SendMessage-to-" + Utilities.toTruncatedString(id, 15));
+
+                connection.sendMessage(networkEnvelope);
+                return connection;
+            });
+
+            Futures.addCallback(future, new FutureCallback<>() {
+                public void onSuccess(Connection connection) {
+                    UserThread.execute(() -> resultFuture.set(connection));
+                }
+
+                public void onFailure(@NotNull Throwable throwable) {
+                    UserThread.execute(() -> resolveWithException(resultFuture, throwable));
+                }
+            }, MoreExecutors.directExecutor());
+
+        } catch (RejectedExecutionException exception) {
+            if (!executor.isShutdown()) {
+                logSendMessageRejection(exception);
+                UserThread.execute(() -> resolveWithException(resultFuture, exception));
+            }
+        }
+        return resultFuture;
+    }
+
+    // Rejections come in bursts when a send pool saturates, so keep the full trace but throttle it.
+    private void logSendMessageRejection(RejectedExecutionException exception) {
+        long now = System.currentTimeMillis();
+        long last = lastRejectionLogTs.get();
+        if (now - last > REJECTION_LOG_INTERVAL_MS && lastRejectionLogTs.compareAndSet(last, now)) {
+            int suppressed = suppressedRejectionLogs.getAndSet(0);
+            log.warn("RejectedExecutionException at sendMessage (send pool saturated){}: ",
+                    suppressed > 0 ? "; " + suppressed + " similar suppressed since last log" : "", exception);
+        } else {
+            suppressedRejectionLogs.incrementAndGet();
+        }
+    }
+
+    private void resolveWithException(SettableFuture<?> future, Throwable exception) {
+        if (!future.setException(exception)) {
+            future.cancel(true); // In case the setException returns false we need to cancel the future.
+        }
+    }
+
+    public ReadOnlyObjectProperty<NodeAddress> nodeAddressProperty() {
+        return nodeAddressProperty;
+    }
+
+    public Set<Connection> getAllConnections() {
+        // Can contain inbound and outbound connections with the same peer node address,
+        // as connection hashcode is using uid and port info
+        Set<Connection> set = new HashSet<>(inBoundConnections);
+        set.addAll(outBoundConnections);
+        return set;
+    }
+
+    public Set<Connection> getConfirmedConnections() {
+        // Can contain inbound and outbound connections with the same peer node address,
+        // as connection hashcode is using uid and port info
+        return getAllConnections().stream()
+                .filter(Connection::hasPeersNodeAddress)
+                .collect(Collectors.toSet());
+    }
+
+    public Set<NodeAddress> getNodeAddressesOfConfirmedConnections() {
+        // Does not contain inbound and outbound connection with the same peer node address
+        return getConfirmedConnections().stream()
+                .map(e -> e.getPeersNodeAddressOptional().get())
+                .collect(Collectors.toSet());
+    }
+
+    public void closeConnections(NodeAddress peersNodeAddress, CloseConnectionReason closeConnectionReason) {
+        getConnections(peersNodeAddress).forEach(connection -> {
+            // unregister before the asynchronous shutdown so a concurrent send opens a fresh connection
+            inBoundConnections.remove(connection);
+            outBoundConnections.remove(connection);
+            connection.shutDown(closeConnectionReason);
+        });
+    }
+
+    // Callers which require resources to be released can handle an incomplete shutdown separately.
+    public void shutDown(Runnable shutDownCompleteHandler, ErrorMessageHandler errorMessageHandler) {
+        shutDown(shutDownCompleteHandler);
+    }
+
+    public void shutDown(Runnable shutDownCompleteHandler) {
+        log.info("NetworkNode shutdown started");
+        if (!isShutDownStarted) {
+            isShutDownStarted = true;
+            if (server != null) {
+                shutDownServer(server);
+                server = null;
+            }
+
+            Set<Connection> allConnections = getAllConnections();
+            int numConnections = allConnections.size();
+
+            // The timeout and the final connection close can both report completion.
+            AtomicBoolean completed = new AtomicBoolean();
+            Runnable completeOnce = () -> {
+                if (!completed.compareAndSet(false, true)) return;
+                connectionExecutor.shutdownNow();
+                sendMessageExecutor.shutdownNow();
+                if (shutDownCompleteHandler != null) shutDownCompleteHandler.run();
+            };
+
+            if (numConnections == 0) {
+                log.info("Shutdown immediately because no connections are open.");
+                completeOnce.run();
+                return;
+            }
+
+            log.info("Shutdown {} connections", numConnections);
+
+            AtomicInteger shutdownCompleted = new AtomicInteger();
+            Timer timeoutHandler = UserThread.runAfter(() -> {
+                log.info("Shutdown completed due timeout");
+                completeOnce.run();
+            }, 1500, TimeUnit.MILLISECONDS);
+
+            allConnections.forEach(c -> c.shutDown(CloseConnectionReason.APP_SHUT_DOWN,
+                    () -> {
+                        shutdownCompleted.getAndIncrement();
+                        if (c.getPeersNodeAddressOptional().isPresent()) log.info("Shutdown of node {} completed", c.getPeersNodeAddressOptional().get());
+                        if (shutdownCompleted.get() == numConnections) {
+                            log.info("Shutdown completed with all connections closed");
+                            timeoutHandler.stop();
+                            completeOnce.run();
+                        }
+                    }));
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // SetupListener
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public void addSetupListener(SetupListener setupListener) {
+        boolean isNewEntry = setupListeners.add(setupListener);
+        if (!isNewEntry)
+            log.warn("Try to add a setupListener which was already added.");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // MessageListener implementation
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public void onMessage(NetworkEnvelope networkEnvelope, Connection connection) {
+        messageListeners.stream().forEach(e -> e.onMessage(networkEnvelope, connection));
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Listeners
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public void addConnectionListener(ConnectionListener connectionListener) {
+        boolean isNewEntry = connectionListeners.add(connectionListener);
+        if (!isNewEntry)
+            log.warn("Try to add a connectionListener which was already added.\n\tconnectionListener={}\n\tconnectionListeners={}",
+                    connectionListener, connectionListeners);
+    }
+
+    public void removeConnectionListener(ConnectionListener connectionListener) {
+        boolean contained = connectionListeners.remove(connectionListener);
+        if (!contained)
+            log.debug("Try to remove a connectionListener which was never added.\n\t" +
+                    "That might happen because of async behaviour of CopyOnWriteArraySet");
+    }
+
+    public void addMessageListener(MessageListener messageListener) {
+        boolean isNewEntry = messageListeners.add(messageListener);
+        if (!isNewEntry)
+            log.warn("Try to add a messageListener which was already added.");
+    }
+
+    public void removeMessageListener(MessageListener messageListener) {
+        boolean contained = messageListeners.remove(messageListener);
+        if (!contained)
+            log.debug("Try to remove a messageListener which was never added.\n\t" +
+                    "That might happen because of async behaviour of CopyOnWriteArraySet");
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Protected
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    void shutDownServer(Server server) {
+        server.shutDown();
+    }
+
+    void startServer(ServerSocket serverSocket) {
+        ConnectionListener connectionListener = new ConnectionListener() {
+            @Override
+            public void onConnection(Connection connection) {
+                if (!connection.isStopped()) {
+                    inBoundConnections.add((InboundConnection) connection);
+                    printInboundConnections();
+                    connectionListeners.stream().forEach(e -> e.onConnection(connection));
+                }
+            }
+
+            @Override
+            public void onDisconnect(CloseConnectionReason closeConnectionReason, Connection connection) {
+                log.trace("onDisconnect at server socket connectionListener\n\tconnection={}", connection);
+                // noinspection SuspiciousMethodCalls
+                inBoundConnections.remove(connection);
+                printInboundConnections();
+                connectionListeners.stream().forEach(e -> e.onDisconnect(closeConnectionReason, connection));
+            }
+        };
+        server = new Server(serverSocket,
+                NetworkNode.this,
+                connectionListener,
+                networkProtoResolver,
+                banFilter);
+        server.start();
+    }
+
+    private void printOutBoundConnections() {
+        StringBuilder sb = new StringBuilder("outBoundConnections size()=")
+                .append(outBoundConnections.size()).append("\n\toutBoundConnections=");
+        outBoundConnections.stream().forEach(e -> sb.append(e).append("\n\t"));
+        log.debug(sb.toString());
+    }
+
+    private void printInboundConnections() {
+
+        // this is high cpu and spam with DoS attack, so it's only enabled for debug level
+        if (log.isDebugEnabled()) {
+            StringBuilder sb = new StringBuilder("inBoundConnections size()=")
+                    .append(inBoundConnections.size()).append("\n\tinBoundConnections=");
+            inBoundConnections.stream().forEach(e -> sb.append(e).append("\n\t"));
+            log.debug(sb.toString());
+        }
+    }
+
+    protected abstract Socket createSocket(NodeAddress peersNodeAddress) throws IOException;
+
+    @Nullable
+    public NodeAddress getNodeAddress() {
+        return nodeAddressProperty.get();
+    }
+
+    public Optional<Capabilities> findPeersCapabilities(NodeAddress nodeAddress) {
+        return getConfirmedConnections().stream()
+                .filter(c -> c.getPeersNodeAddressProperty().get() != null)
+                .filter(c -> c.getPeersNodeAddressProperty().get().equals(nodeAddress))
+                .map(Connection::getCapabilities)
+                .findAny();
+    }
+
+    public long upTime() {
+        // how long Haveno has been running with at least one connection
+        // uptime is relative to last all connections lost event
+        long earliestConnection = new Date().getTime();
+        for (Connection connection : outBoundConnections) {
+            earliestConnection = Math.min(earliestConnection, connection.getStatistic().getCreationDate().getTime());
+        }
+        return new Date().getTime() - earliestConnection;
+    }
+
+    public int getInboundConnectionCount() {
+        return inBoundConnections.size();
+    }
+
+    public int getOutboundConnectionCount() {
+        return outBoundConnections.size();
+    }
+}

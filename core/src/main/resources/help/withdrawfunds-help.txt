@@ -1,0 +1,34 @@
+withdrawfunds
+
+NAME
+----
+withdrawfunds - withdraw received trade funds
+
+SYNOPSIS
+--------
+withdrawfunds
+		--trade-id=<value>
+		--address=<value>
+		--memo=<value>
+
+DESCRIPTION
+-----------
+Send trade payout funds to an external XMR address, and move the trade to the
+closed trades list.
+
+OPTIONS
+-------
+--trade-id
+		The id of the trade.
+
+--address
+		The destination XMR address.
+
+--memo
+		An optional memo saved with the withdrawal transaction.
+		A multi word memo must be double quoted.
+
+EXAMPLES
+--------
+Withdraw trade funds:
+$ ./haveno-cli --password=xyz --port=9998 withdrawfunds --trade-id=<trade-id> --address=<xmr-address> --memo="note to self"

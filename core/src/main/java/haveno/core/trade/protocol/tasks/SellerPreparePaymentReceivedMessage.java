@@ -1,0 +1,129 @@
+/*
+ * This file is part of Haveno.
+ *
+ * Haveno is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Haveno is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Haveno. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.trade.protocol.tasks;
+
+import haveno.common.taskrunner.TaskRunner;
+import haveno.core.support.dispute.Dispute;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.trade.Trade;
+import lombok.extern.slf4j.Slf4j;
+import monero.wallet.model.MoneroTxWallet;
+
+@Slf4j
+public class SellerPreparePaymentReceivedMessage extends TradeTask {
+
+    @SuppressWarnings({"unused"})
+    public SellerPreparePaymentReceivedMessage(TaskRunner taskHandler, Trade trade) {
+        super(taskHandler, trade);
+    }
+
+    @Override
+    protected void run() {
+        try {
+            runInterceptHook();
+
+            // check connection
+            trade.verifyDaemonConnection();
+
+            // prepare payout info for payment received message
+            if (!trade.isPayoutPublished() || (!trade.isPayoutFinalized() && trade.getPayoutTxHex() == null)) {
+
+                // synchronize on lock for wallet operations
+                synchronized (trade.getWalletLock()) {
+                    synchronized (HavenoUtils.getWalletFunctionLock()) {
+
+                        // update wallet unless already signed
+                        if (trade.getPayoutTxHex() == null) {
+                            trade.updateWallet();
+                        }
+
+                        // verify, sign, and publish payout tx if given
+                        if (trade.getBuyer().getPaymentSentMessage().getPayoutTxHex() != null && !trade.getProcessModel().isPaymentSentPayoutTxStale()) {
+                            try {
+                                if (trade.getPayoutTxHex() == null) {
+                                    log.info("Seller verifying, signing, and publishing payout tx for trade {}", trade.getId());
+                                    trade.processPayoutTx(trade.getBuyer().getPaymentSentMessage().getPayoutTxHex(), true, true);
+                                } else {
+                                    log.warn("Seller publishing previously signed payout tx for trade {}", trade.getId());
+                                    trade.processPayoutTx(trade.getPayoutTxHex(), false, true);
+                                }
+                            } catch (IllegalArgumentException | IllegalStateException e) {
+                                log.warn("Illegal state or argument verifying, signing, and publishing payout tx for {} {}. Creating new unsigned payout tx. error={}. ", trade.getClass().getSimpleName(), trade.getId(), e.getMessage(), e);
+                                createUnsignedPayoutTx();
+                            } catch (Exception e) {
+                                log.warn("Error verifying, signing, and publishing payout tx for trade {}: {}", trade.getId(), e.getMessage(), e);
+                                throw e;
+                            }
+                        }
+                        
+                        // otherwise create unsigned payout tx
+                        else if (trade.getSelf().getUnsignedPayoutTxHex() == null) {
+                            createUnsignedPayoutTx();
+                        }
+                    }
+                }
+            } else if (!trade.isPayoutPublished() && trade.getPayoutTxHex() != null) {
+
+                    // republish payout tx from previous message
+                    log.info("Seller re-verifying and publishing signed payout tx for trade {}", trade.getId());
+                    trade.processPayoutTx(trade.getPayoutTxHex(), false, true);
+            } else if (!trade.isPayoutFinalized() && (trade.getArbitrator().getPaymentReceivedMessage() == null || trade.getBuyer().getPaymentReceivedMessage() == null)) {
+
+                // update multisig info if payout not finalized and recreating messages
+                synchronized (trade.getWalletLock()) {
+                    if (trade.walletExists()) {
+                        synchronized (HavenoUtils.getWalletFunctionLock()) {
+                            trade.updateWallet();
+                            trade.exportMultisigHex();
+                        }
+                    }
+                }
+            }
+
+            // close open disputes
+            if (trade.isPayoutPublished() && trade.getDisputeState().ordinal() >= Trade.DisputeState.DISPUTE_PREPARING.ordinal()) {
+                trade.advanceDisputeState(Trade.DisputeState.DISPUTE_CLOSED);
+                for (Dispute dispute : trade.getDisputes()) dispute.setIsClosed();
+            }
+
+            trade.requestPersistence();
+            complete();
+        } catch (Throwable t) {
+            if (HavenoUtils.isIllegal(t)) {
+                log.error("Illegal exception preparing payment received message in {} {}: {}", trade.getClass().getSimpleName(), trade.getId(), t.getMessage(), t);
+                trade.exportMultisigHex();
+                complete(); // proceed to send the message to perform nack flow with updated multsig state
+            } else {
+                failed(t);
+            }
+        }
+    }
+
+    private void createUnsignedPayoutTx() {
+        log.info("Seller creating unsigned payout tx for trade {}", trade.getId());
+        try {
+            trade.getProcessModel().setPaymentSentPayoutTxStale(true);
+            MoneroTxWallet payoutTx = trade.createPayoutTx();
+            trade.setPayoutTx(payoutTx);
+            trade.getSelf().setUnsignedPayoutTxHex(payoutTx.getTxSet().getMultisigTxHex());
+        } catch (Exception e) {
+            if (trade.isPayoutPublished()) log.info("Payout tx already published for {} {}", trade.getClass().getName(), trade.getId());
+            else throw e;
+        }
+    }
+}

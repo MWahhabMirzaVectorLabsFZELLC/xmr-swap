@@ -1,0 +1,29 @@
+sendxmr
+
+NAME
+----
+sendxmr - send XMR to an external wallet address
+
+SYNOPSIS
+--------
+sendxmr
+		--address=<value>
+		--amount=<value>
+
+DESCRIPTION
+-----------
+Creates, relays, and returns a transaction sending XMR from the Haveno wallet
+to an external XMR address.
+
+OPTIONS
+-------
+--address
+		The destination XMR address.
+
+--amount
+		The amount of XMR to send.
+
+EXAMPLES
+--------
+Send 0.5 XMR:
+$ ./haveno-cli --password=xyz --port=9998 sendxmr --address=<xmr-address> --amount=0.5

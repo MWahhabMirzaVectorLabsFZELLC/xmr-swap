@@ -1,0 +1,72 @@
+createoffer
+
+NAME
+----
+createoffer - create and place an offer to buy or sell XMR
+
+SYNOPSIS
+--------
+createoffer
+		--payment-account-id=<value>
+		--direction=<value>
+		--currency-code=<value>
+		--amount=<value>
+		--min-amount=<value>
+		--fixed-price=<value>
+		--market-price-margin=<value>
+		--security-deposit=<value>
+		--trigger-price=<value>
+		--reserve-exact-amount=<value>
+		--extra-info=<value>
+
+DESCRIPTION
+-----------
+Create and place an offer to buy or sell XMR, using a payment account with the given id.
+
+OPTIONS
+-------
+--payment-account-id
+		The id of the payment account used for the offer.
+
+--direction
+		The offer direction (buy|sell).
+
+--currency-code
+		The three letter code of the currency traded for XMR, e.g., EUR, USD, BCH, ...
+
+--amount
+		The amount of XMR to buy or sell.
+
+--min-amount
+		The optional minimum amount of XMR to buy or sell.  If used, the offer can be
+		taken for any amount between min-amount and amount.  The default is amount.
+
+--fixed-price
+		The fixed price of the offer.  Cannot be used with market-price-margin.
+
+--market-price-margin
+		The offer price margin (%) above or below the current market price.
+		Cannot be used with fixed-price.
+
+--security-deposit
+		The security deposit (%) of the XMR amount both traders must deposit.
+
+--trigger-price
+		The optional price at which a market priced offer is automatically deactivated.
+
+--reserve-exact-amount
+		Reserve only the exact amount needed for the offer (true|false, default false).
+		Requires an extra transaction and 10 confirmations before the offer is posted.
+
+--extra-info
+		Optional extra terms and info for the offer.  Multi word terms must be double quoted.
+
+EXAMPLES
+--------
+Create a fixed priced offer to buy 0.5 XMR for EUR:
+$ ./haveno-cli --password=xyz --port=9998 createoffer --payment-account-id=<payment-account-id> --direction=buy --currency-code=eur \
+    --amount=0.5 --fixed-price=150.75 --security-deposit=15.0
+
+Create a market priced offer to sell 1.0 XMR for USD at 2% above the market price:
+$ ./haveno-cli --password=xyz --port=9998 createoffer --payment-account-id=<payment-account-id> --direction=sell --currency-code=usd \
+    --amount=1.0 --market-price-margin=2.00 --security-deposit=15.0

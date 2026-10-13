@@ -1,0 +1,24 @@
+canceloffer
+
+NAME
+----
+canceloffer - cancel an offer
+
+SYNOPSIS
+--------
+canceloffer
+		--offer-id=<value>
+
+DESCRIPTION
+-----------
+Cancel an offer, removing it from the offer book and releasing the reserved funds.
+
+OPTIONS
+-------
+--offer-id
+		The id of the offer being canceled.
+
+EXAMPLES
+--------
+Cancel an offer:
+$ ./haveno-cli --password=xyz --port=9998 canceloffer --offer-id=<offer-id>

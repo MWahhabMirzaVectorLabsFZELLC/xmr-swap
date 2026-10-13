@@ -1,0 +1,32 @@
+gettrade
+
+NAME
+----
+gettrade - get a trade
+
+SYNOPSIS
+--------
+gettrade
+		--trade-id=<value>
+		--show-contract=<value>
+
+DESCRIPTION
+-----------
+Returns a summary of a trade with the given id, or the trade's full contract if
+the show-contract option is used.
+
+OPTIONS
+-------
+--trade-id
+		The id of the trade.
+
+--show-contract
+		Optionally display the trade's full contract as json (true|false, default false).
+
+EXAMPLES
+--------
+Get a trade summary:
+$ ./haveno-cli --password=xyz --port=9998 gettrade --trade-id=<trade-id>
+
+Get a trade contract:
+$ ./haveno-cli --password=xyz --port=9998 gettrade --trade-id=<trade-id> --show-contract=true

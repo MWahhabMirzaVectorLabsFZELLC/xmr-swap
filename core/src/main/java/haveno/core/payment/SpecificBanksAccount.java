@@ -1,0 +1,77 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.payment;
+
+import haveno.core.api.model.PaymentAccountFormField;
+import haveno.core.locale.CurrencyUtil;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.payment.payload.PaymentAccountPayload;
+import haveno.core.payment.payload.PaymentMethod;
+import haveno.core.payment.payload.SpecificBanksAccountPayload;
+import lombok.EqualsAndHashCode;
+import lombok.NonNull;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@EqualsAndHashCode(callSuper = true)
+public final class SpecificBanksAccount extends GeneralBankAccount implements BankNameRestrictedBankAccount {
+
+    public static final List<TradeCurrency> SUPPORTED_CURRENCIES = CurrencyUtil.getAllFiatCurrencies();
+
+    // same fields as the general bank account, plus the list of accepted banks
+    private static final List<PaymentAccountFormField.FieldId> INPUT_FIELD_IDS = List.of(
+            PaymentAccountFormField.FieldId.COUNTRY,
+            PaymentAccountFormField.FieldId.HOLDER_NAME,
+            PaymentAccountFormField.FieldId.HOLDER_TAX_ID,
+            PaymentAccountFormField.FieldId.BANK_NAME,
+            PaymentAccountFormField.FieldId.BANK_ID,
+            PaymentAccountFormField.FieldId.BRANCH_ID,
+            PaymentAccountFormField.FieldId.NATIONAL_ACCOUNT_ID,
+            PaymentAccountFormField.FieldId.ACCOUNT_NR,
+            PaymentAccountFormField.FieldId.ACCOUNT_TYPE,
+            PaymentAccountFormField.FieldId.ACCEPTED_BANKS,
+            PaymentAccountFormField.FieldId.TRADE_CURRENCIES,
+            PaymentAccountFormField.FieldId.ACCOUNT_NAME,
+            PaymentAccountFormField.FieldId.SALT
+    );
+
+    public SpecificBanksAccount() {
+        super(PaymentMethod.SPECIFIC_BANKS);
+    }
+
+    @Override
+    protected PaymentAccountPayload createPayload() {
+        return new SpecificBanksAccountPayload(paymentMethod.getId(), id);
+    }
+
+    @Override
+    public @NonNull List<TradeCurrency> getSupportedCurrencies() {
+        return SUPPORTED_CURRENCIES;
+    }
+
+    @Override
+    public @NonNull List<PaymentAccountFormField.FieldId> getInputFieldIds() {
+        return INPUT_FIELD_IDS;
+    }
+
+    // TODO change to List
+    public ArrayList<String> getAcceptedBanks() {
+        return ((SpecificBanksAccountPayload) paymentAccountPayload).getAcceptedBanks();
+    }
+}

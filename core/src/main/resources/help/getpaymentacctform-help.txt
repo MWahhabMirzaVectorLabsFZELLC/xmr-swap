@@ -1,0 +1,26 @@
+getpaymentacctform
+
+NAME
+----
+getpaymentacctform - get a payment account form
+
+SYNOPSIS
+--------
+getpaymentacctform
+		--payment-method-id=<value>
+
+DESCRIPTION
+-----------
+Returns a blank json payment account form for the given payment-method-id, and saves
+it to the current directory.  Edit the file, then use it as the argument to a
+createpaymentacct command.
+
+OPTIONS
+-------
+--payment-method-id
+		The id of the payment method, from the getpaymentmethods method.
+
+EXAMPLES
+--------
+Get a payment account form for SEPA:
+$ ./haveno-cli --password=xyz --port=9998 getpaymentacctform --payment-method-id=SEPA

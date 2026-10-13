@@ -1,0 +1,1010 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.main.settings.preferences;
+
+import com.google.inject.Inject;
+import com.google.inject.name.Named;
+import de.jensd.fx.glyphs.fontawesome.FontAwesomeIcon;
+import haveno.common.UserThread;
+import haveno.common.app.DevEnv;
+import haveno.common.config.Config;
+import haveno.common.util.Tuple2;
+import haveno.common.util.Tuple3;
+import haveno.common.util.Utilities;
+import haveno.core.filter.Filter;
+import haveno.core.filter.FilterManager;
+import haveno.core.locale.Country;
+import haveno.core.locale.CountryUtil;
+import haveno.core.locale.CryptoCurrency;
+import haveno.core.locale.CurrencyUtil;
+import haveno.core.locale.LanguageUtil;
+import haveno.core.locale.Res;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.locale.TraditionalCurrency;
+import haveno.core.payment.PaymentAccount;
+import haveno.core.payment.payload.PaymentMethod;
+import haveno.core.payment.validation.XmrValidator;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.user.DontShowAgainLookup;
+import haveno.core.user.Preferences;
+import haveno.core.user.User;
+import haveno.core.util.FormattingUtils;
+import haveno.core.util.ParsingUtils;
+import haveno.core.util.validation.InputValidator.ValidationResult;
+import haveno.core.util.validation.IntegerValidator;
+import haveno.core.util.validation.RegexValidator;
+import haveno.core.util.validation.RegexValidatorFactory;
+import haveno.desktop.app.HavenoApp;
+import haveno.desktop.common.view.ActivatableViewAndModel;
+import haveno.desktop.common.view.FxmlView;
+import haveno.desktop.components.AutoTooltipButton;
+import haveno.desktop.components.AutoTooltipLabel;
+import haveno.desktop.components.AutoTooltipSlideToggleButton;
+import haveno.desktop.components.AutocompleteComboBox;
+import haveno.desktop.components.InfoAutoTooltipLabel;
+import haveno.desktop.components.InputTextField;
+import haveno.desktop.components.PasswordTextField;
+import haveno.desktop.components.TitledGroupBg;
+import haveno.desktop.main.overlays.popups.Popup;
+import haveno.desktop.main.overlays.windows.EditCustomExplorerWindow;
+import static haveno.desktop.util.FormBuilder.addAutocompleteComboBox;
+import static haveno.desktop.util.FormBuilder.addButton;
+import static haveno.desktop.util.FormBuilder.addComboBox;
+import static haveno.desktop.util.FormBuilder.addInputTextField;
+import static haveno.desktop.util.FormBuilder.addSlideToggleButton;
+import static haveno.desktop.util.FormBuilder.addTextFieldWithEditButton;
+import static haveno.desktop.util.FormBuilder.addTitledGroupBg;
+import static haveno.desktop.util.FormBuilder.addTopLabelListView;
+import haveno.desktop.util.Accessibility;
+import haveno.desktop.util.GUIUtil;
+import haveno.desktop.util.ImageUtil;
+import haveno.desktop.util.Layout;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import javafx.beans.value.ChangeListener;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.geometry.HPos;
+import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
+import javafx.geometry.VPos;
+import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
+import javafx.scene.control.Separator;
+import javafx.scene.control.TextField;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.layout.ColumnConstraints;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.VBox;
+import javafx.util.Callback;
+import javafx.util.StringConverter;
+import org.apache.commons.lang3.StringUtils;
+
+@FxmlView
+public class PreferencesView extends ActivatableViewAndModel<GridPane, PreferencesViewModel> {
+    private final User user;
+    private TextField xmrExplorerTextField;
+    private ComboBox<String> userLanguageComboBox;
+    private ComboBox<Country> userCountryComboBox;
+    private AutocompleteComboBox<TradeCurrency> preferredTradeCurrencyComboBox;
+
+    private ToggleButton showOwnOffersInOfferBook, useAnimations, useDarkMode, useSoftwareRendering, sortMarketCurrenciesNumerically,
+            avoidStandbyMode, useSoundForNotifications, useNativeXmrWallet, useCustomFee, autoConfirmXmrToggle, hideNonAccountPaymentMethodsToggle, denyApiTakerToggle,
+            notifyOnPreReleaseToggle;
+    private int gridRow = 0;
+    private int displayCurrenciesGridRowIndex = 0;
+    private GridPane optionsGridPane, currenciesGridPane;
+    private InputTextField ignoreTradersListInputTextField,
+            autoConfRequiredConfirmationsTf, autoConfServiceAddressTf, autoConfTradeLimitTf, clearDataAfterDaysInputTextField,
+            rpcUserTextField, blockNotifyPortTextField;
+    private PasswordTextField rpcPwTextField;
+
+    private ChangeListener<Boolean> autoConfServiceAddressFocusOutListener, autoConfRequiredConfirmationsFocusOutListener;
+    private final Preferences preferences;
+    //private final ReferralIdService referralIdService;
+    private final FilterManager filterManager;
+    private final File storageDir;
+
+    private ListView<TraditionalCurrency> traditionalCurrenciesListView;
+    private ComboBox<TraditionalCurrency> traditionalCurrenciesComboBox;
+    private ListView<CryptoCurrency> cryptoCurrenciesListView;
+    private ComboBox<CryptoCurrency> cryptoCurrenciesComboBox;
+    private Button resetDontShowAgainButton, editCustomBtcExplorer;
+    private ObservableList<String> languageCodes;
+    private ObservableList<Country> countries;
+    private ObservableList<TraditionalCurrency> traditionalCurrencies;
+    private ObservableList<TraditionalCurrency> allTraditionalCurrencies;
+    private ObservableList<CryptoCurrency> cryptoCurrencies;
+    private ObservableList<CryptoCurrency> allCryptoCurrencies;
+    private ObservableList<TradeCurrency> tradeCurrencies;
+    private InputTextField deviationInputTextField;
+    private ChangeListener<String> deviationListener, ignoreTradersListListener,
+            rpcUserListener, rpcPwListener, blockNotifyPortListener, clearDataAfterDaysListener,
+            autoConfTradeLimitListener, autoConfServiceAddressListener;
+    private ChangeListener<Boolean> deviationFocusedListener;
+    private ChangeListener<Number> cssThemeListener;
+    private final boolean displayStandbyModeFeature;
+    private ChangeListener<Filter> filterChangeListener;
+
+    private boolean hideXmrAutoConf = true; // TODO: remove xmr auto conf or use as a model for other blockchains
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor, initialisation
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Inject
+    public PreferencesView(PreferencesViewModel model,
+                           Preferences preferences,
+                           FilterManager filterManager,
+                           Config config,
+                           User user,
+                           @Named(Config.STORAGE_DIR) File storageDir) {
+        super(model);
+        this.user = user;
+        this.preferences = preferences;
+        this.filterManager = filterManager;
+        this.storageDir = storageDir;
+        this.displayStandbyModeFeature = Utilities.isLinux() || Utilities.isOSX() || Utilities.isWindows();
+    }
+
+    @Override
+    public void initialize() {
+        languageCodes = FXCollections.observableArrayList(LanguageUtil.getUserLanguageCodes());
+        countries = FXCollections.observableArrayList(CountryUtil.getAllCountries());
+        traditionalCurrencies = preferences.getTraditionalCurrenciesAsObservable();
+        cryptoCurrencies = preferences.getCryptoCurrenciesAsObservable();
+        tradeCurrencies = preferences.getTradeCurrenciesAsObservable();
+
+        allTraditionalCurrencies = FXCollections.observableArrayList(CurrencyUtil.getAllSortedTraditionalCurrencies());
+        allTraditionalCurrencies.removeAll(traditionalCurrencies);
+
+        initializeGeneralOptions();
+        initializeDisplayOptions();
+        initializeSeparator();
+        initializeAutoConfirmOptions();
+        initializeDisplayCurrencies();
+    }
+
+
+    @Override
+    protected void activate() {
+        String key = "sensitiveDataRemovalInfo";
+        if (DontShowAgainLookup.showAgain(key) &&
+                (preferences.getClearDataAfterDays() == 0 ||
+                preferences.getClearDataAfterDays() == Preferences.CLEAR_DATA_AFTER_DAYS_DISABLED)) { // existing users must agree to new feature
+            new Popup()
+                    .headLine(Res.get("setting.info.headline"))
+                    .backgroundInfo(Res.get("settings.preferences.sensitiveDataRemoval.msg"))
+                    .actionButtonText(Res.get("shared.iUnderstand"))
+                    .onAction(() -> {
+                        DontShowAgainLookup.dontShowAgain(key, true);
+                        // user has acknowledged, enable the feature with a reasonable default value
+                        preferences.setClearDataAfterDays(Preferences.CLEAR_DATA_AFTER_DAYS_DEFAULT);
+                        clearDataAfterDaysInputTextField.setText(String.valueOf(preferences.getClearDataAfterDays()));
+                    })
+                    .closeButtonText(Res.get("shared.cancel"))
+                    .show();
+        }
+
+        // We want to have it updated in case an asset got removed
+        allCryptoCurrencies = FXCollections.observableArrayList(CurrencyUtil.getActiveSortedCryptoCurrencies(filterManager));
+        allCryptoCurrencies.removeAll(cryptoCurrencies);
+
+        activateGeneralOptions();
+        activateDisplayCurrencies();
+        activateDisplayPreferences();
+        activateAutoConfirmPreferences();
+    }
+
+    @Override
+    protected void deactivate() {
+        deactivateGeneralOptions();
+        deactivateDisplayCurrencies();
+        deactivateDisplayPreferences();
+        deactivateAutoConfirmPreferences();
+    }
+
+    public void onNavigationAway() {
+        if (deviationInputTextField.isFocused())
+            applyPriceDeviation();
+        resetPriceDeviation();
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Initialize
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void initializeGeneralOptions() {
+        // own grid so left column rows aren't stretched by the currency lists sharing root's rows
+        optionsGridPane = new GridPane();
+        optionsGridPane.setVgap(5);
+        ColumnConstraints columnConstraints = new ColumnConstraints();
+        columnConstraints.setHgrow(Priority.ALWAYS);
+        optionsGridPane.getColumnConstraints().add(columnConstraints);
+        GridPane.setValignment(optionsGridPane, VPos.TOP);
+        root.add(optionsGridPane, 0, 0);
+
+        int titledGroupBgRowSpan = displayStandbyModeFeature ? 9 : 8;
+        TitledGroupBg titledGroupBg = addTitledGroupBg(optionsGridPane, gridRow, titledGroupBgRowSpan, Res.get("setting.preferences.general"));
+        GridPane.setColumnSpan(titledGroupBg, 1);
+
+        userLanguageComboBox = addComboBox(optionsGridPane, gridRow,
+                Res.get("shared.language"), Layout.FIRST_ROW_DISTANCE);
+        userCountryComboBox = addComboBox(optionsGridPane, ++gridRow,
+                Res.get("shared.country"));
+        userCountryComboBox.setButtonCell(GUIUtil.getComboBoxButtonCell(Res.get("shared.country"), userCountryComboBox,
+                false));
+
+        Tuple2<TextField, Button> xmrExp = addTextFieldWithEditButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.explorer"));
+        xmrExplorerTextField = xmrExp.first;
+        editCustomBtcExplorer = xmrExp.second;
+
+        // deviation
+        deviationInputTextField = addInputTextField(optionsGridPane, ++gridRow,
+                Res.get("setting.preferences.deviation"));
+        deviationListener = (observable, oldValue, newValue) -> {
+            if (!deviationInputTextField.validationResultProperty().get().isValid) {
+                deviationInputTextField.validationResultProperty().set(new ValidationResult(true));
+            }
+        };
+        deviationFocusedListener = (observable, oldValue, newValue) -> {
+            if (oldValue && !newValue)
+                applyPriceDeviation();
+        };
+
+        // ignoreTraders
+        ignoreTradersListInputTextField = addInputTextField(optionsGridPane, ++gridRow,
+                Res.get("setting.preferences.ignorePeers"));
+        RegexValidator regexValidator = RegexValidatorFactory.addressRegexValidator();
+        ignoreTradersListInputTextField.setValidator(regexValidator);
+        ignoreTradersListInputTextField.setErrorMessage(Res.get("validation.invalidAddressList"));
+        ignoreTradersListListener = (observable, oldValue, newValue) -> {
+            if (regexValidator.validate(newValue).isValid && !newValue.equals(oldValue)) {
+                preferences.setIgnoreTradersList(Arrays.asList(StringUtils.deleteWhitespace(newValue).split(",")));
+            }
+        };
+
+        // clearDataAfterDays
+        clearDataAfterDaysInputTextField = addInputTextField(optionsGridPane, ++gridRow, Res.get("setting.preferences.clearDataAfterDays"));
+        IntegerValidator clearDataAfterDaysValidator = new IntegerValidator();
+        clearDataAfterDaysValidator.setMinValue(1);
+        clearDataAfterDaysValidator.setMaxValue(Preferences.CLEAR_DATA_AFTER_DAYS_DISABLED);
+        clearDataAfterDaysInputTextField.setValidator(clearDataAfterDaysValidator);
+        clearDataAfterDaysListener = (observable, oldValue, newValue) -> {
+            try {
+                int value = Integer.parseInt(newValue);
+                if (!newValue.equals(oldValue)) {
+                    preferences.setClearDataAfterDays(value);
+                }
+            } catch (Throwable ignore) {
+            }
+        };
+
+        if (displayStandbyModeFeature) {
+            // AvoidStandbyModeService feature works only on OSX & Windows
+            avoidStandbyMode = addSlideToggleButton(optionsGridPane, ++gridRow,
+                    Res.get("setting.preferences.avoidStandbyMode"), 8);
+        }
+
+        useSoundForNotifications = addSlideToggleButton(optionsGridPane, ++gridRow,
+                Res.get("setting.preferences.useSoundForNotifications"));
+
+        useNativeXmrWallet = new AutoTooltipSlideToggleButton();
+        useNativeXmrWallet.setText(Res.get("setting.preferences.useNativeXmrWallet"));
+        InfoAutoTooltipLabel useNativeXmrWalletInfo = new InfoAutoTooltipLabel("", FontAwesomeIcon.INFO_CIRCLE, ContentDisplay.RIGHT,
+                Res.get("setting.preferences.useNativeXmrWallet.info"), 420);
+        HBox useNativeXmrWalletBox = new HBox(6, useNativeXmrWallet, useNativeXmrWalletInfo);
+        useNativeXmrWalletBox.setAlignment(Pos.CENTER_LEFT);
+        GridPane.setRowIndex(useNativeXmrWalletBox, ++gridRow);
+        optionsGridPane.getChildren().add(useNativeXmrWalletBox);
+    }
+
+    private void resetPriceDeviation() {
+        deviationInputTextField.setText(FormattingUtils.formatToPercentWithSymbol(preferences.getMaxPriceDistanceInPercent()));
+        deviationInputTextField.validationResultProperty().set(new ValidationResult(true));
+    }
+
+    private void applyPriceDeviation() {
+        String input = deviationInputTextField.getText();
+        if (input.trim().isEmpty()) {
+            deviationInputTextField.setInvalid(Res.get("validation.empty"));
+            return;
+        }
+
+        try {
+            double percent = ParsingUtils.parseNumberStringToDouble(input.replace("%", ""));
+            if (!Double.isFinite(percent)) {
+                deviationInputTextField.setInvalid(Res.get("validation.NaN"));
+                return;
+            }
+            if (percent < 0 || percent > 100) {
+                deviationInputTextField.setInvalid(percent < 0 ? Res.get("validation.negative") :
+                        Res.get("setting.preferences.deviationToLarge", 100));
+                return;
+            }
+
+            double value = ParsingUtils.parsePercentStringToDouble(input);
+            if (value != preferences.getMaxPriceDistanceInPercent()) {
+                preferences.setMaxPriceDistanceInPercent(value);
+            }
+            deviationInputTextField.setText(FormattingUtils.formatToPercentWithSymbol(value));
+            deviationInputTextField.validationResultProperty().set(new ValidationResult(true));
+        } catch (IllegalArgumentException e) {
+            deviationInputTextField.setInvalid(Res.get("validation.NaN"));
+        }
+    }
+
+    private void initializeSeparator() {
+        final Separator separator = new Separator(Orientation.VERTICAL);
+        separator.setPadding(new Insets(0, 10, 0, 10));
+        GridPane.setColumnIndex(separator, 1);
+        GridPane.setHalignment(separator, HPos.CENTER);
+        GridPane.setRowIndex(separator, 0);
+        GridPane.setRowSpan(separator, GridPane.REMAINING);
+        root.getChildren().add(separator);
+    }
+
+    private void initializeDisplayCurrencies() {
+        // own grid so right column rows aren't shared with the left column's rows
+        currenciesGridPane = new GridPane();
+        currenciesGridPane.setHgap(5);
+        currenciesGridPane.setVgap(5);
+        for (int i = 0; i < 2; i++) {
+            ColumnConstraints columnConstraints = new ColumnConstraints();
+            columnConstraints.setHgrow(Priority.ALWAYS);
+            columnConstraints.setMinWidth(300);
+            currenciesGridPane.getColumnConstraints().add(columnConstraints);
+        }
+        GridPane.setValignment(currenciesGridPane, VPos.TOP);
+        root.add(currenciesGridPane, 2, 0, 2, 1);
+
+        TitledGroupBg titledGroupBg = addTitledGroupBg(currenciesGridPane, displayCurrenciesGridRowIndex, 8,
+                Res.get("setting.preferences.currenciesInList"), hideXmrAutoConf ? 0.0 :Layout.GROUP_DISTANCE);
+        GridPane.setColumnSpan(titledGroupBg, 2);
+
+        preferredTradeCurrencyComboBox = addAutocompleteComboBox(currenciesGridPane, displayCurrenciesGridRowIndex++,
+                Res.get("setting.preferences.prefCurrency"),
+                Layout.FIRST_ROW_DISTANCE);
+
+        preferredTradeCurrencyComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(TradeCurrency object) {
+                return object != null ? object.getName() + " (" + object.getCode() + ")" : "";
+            }
+
+            @Override
+            public TradeCurrency fromString(String string) {
+                return preferredTradeCurrencyComboBox.getItems().stream()
+                        .filter(item -> toString(item).equals(string))
+                        .findAny().orElse(null);
+            }
+        });
+
+        preferredTradeCurrencyComboBox.setCellFactory(GUIUtil.getTradeCurrencyCellFactory("", "",
+                FXCollections.emptyObservableMap()));
+
+        Tuple3<Label, ListView<TraditionalCurrency>, VBox> traditionalTuple = addTopLabelListView(currenciesGridPane, displayCurrenciesGridRowIndex,
+                Res.get("setting.preferences.displayTraditional"));
+
+        int listRowSpan = 6;
+        double listCellHeight = Layout.LIST_ROW_HEIGHT + 4; // taller cell padding in .preferences-currency-list
+        GridPane.setRowSpan(traditionalTuple.third, listRowSpan);
+
+        GridPane.setValignment(traditionalTuple.third, VPos.TOP);
+        GridPane.setMargin(traditionalTuple.third, new Insets(10, 0, 0, 0));
+        traditionalCurrenciesListView = traditionalTuple.second;
+        traditionalCurrenciesListView.getStyleClass().add("preferences-currency-list");
+        traditionalCurrenciesListView.setMinHeight(7 * listCellHeight + 10);
+        traditionalCurrenciesListView.setPrefHeight(9 * listCellHeight + 10);
+        Label placeholder = new AutoTooltipLabel(Res.get("setting.preferences.noTraditional"));
+        placeholder.setWrapText(true);
+        traditionalCurrenciesListView.setPlaceholder(placeholder);
+        traditionalCurrenciesListView.setCellFactory(new Callback<>() {
+            @Override
+            public ListCell<TraditionalCurrency> call(ListView<TraditionalCurrency> list) {
+                return new ListCell<>() {
+                    final Label label = new AutoTooltipLabel();
+                    final Button removeButton = new AutoTooltipButton("", ImageUtil.getImageViewById(ImageUtil.REMOVE_ICON));
+                    final HBox pane = new HBox(8, label, removeButton);
+
+                    {
+                        pane.setAlignment(Pos.CENTER_LEFT);
+                        label.setMinWidth(0);
+                        label.setMaxWidth(Double.MAX_VALUE);
+                        HBox.setHgrow(label, Priority.ALWAYS);
+                        removeButton.setId("icon-button");
+                        removeButton.getStyleClass().add("preferences-currency-remove");
+                        Accessibility.setName(removeButton, Res.get("shared.remove"));
+                    }
+
+                    @Override
+                    public void updateItem(final TraditionalCurrency item, boolean empty) {
+                        super.updateItem(item, empty);
+                        if (item != null && !empty) {
+                            label.setText(item.getNameAndCode());
+                            removeButton.setOnAction(e -> {
+                                if (item.equals(preferences.getPreferredTradeCurrency())) {
+                                    new Popup().warning(Res.get("setting.preferences.cannotRemovePrefCurrency")).show();
+                                } else {
+                                    preferences.removeTraditionalCurrency(item);
+                                    if (!allTraditionalCurrencies.contains(item)) {
+                                        allTraditionalCurrencies.add(item);
+                                        allTraditionalCurrencies.sort(TradeCurrency::compareTo);
+                                    }
+                                }
+                            });
+                            setGraphic(pane);
+                            setAccessibleText(label.getText());
+                        } else {
+                            setGraphic(null);
+                            setAccessibleText(null);
+                            removeButton.setOnAction(null);
+                        }
+                    }
+                };
+            }
+        });
+
+        Tuple3<Label, ListView<CryptoCurrency>, VBox> cryptoCurrenciesTuple = addTopLabelListView(currenciesGridPane,
+                displayCurrenciesGridRowIndex, Res.get("setting.preferences.displayCryptos"));
+
+        GridPane.setColumnIndex(cryptoCurrenciesTuple.third, 1);
+        GridPane.setRowSpan(cryptoCurrenciesTuple.third, listRowSpan);
+
+        GridPane.setValignment(cryptoCurrenciesTuple.third, VPos.TOP);
+        GridPane.setMargin(cryptoCurrenciesTuple.third, new Insets(10, 0, 0, 20));
+        cryptoCurrenciesListView = cryptoCurrenciesTuple.second;
+        cryptoCurrenciesListView.getStyleClass().add("preferences-currency-list");
+        cryptoCurrenciesListView.setMinHeight(7 * listCellHeight + 10);
+        cryptoCurrenciesListView.setPrefHeight(9 * listCellHeight + 10);
+        placeholder = new AutoTooltipLabel(Res.get("setting.preferences.noCryptos"));
+        placeholder.setWrapText(true);
+        cryptoCurrenciesListView.setPlaceholder(placeholder);
+        cryptoCurrenciesListView.setCellFactory(new Callback<>() {
+            @Override
+            public ListCell<CryptoCurrency> call(ListView<CryptoCurrency> list) {
+                return new ListCell<>() {
+                    final Label label = new AutoTooltipLabel();
+                    final Button removeButton = new AutoTooltipButton("", ImageUtil.getImageViewById(ImageUtil.REMOVE_ICON));
+                    final HBox pane = new HBox(8, label, removeButton);
+
+                    {
+                        pane.setAlignment(Pos.CENTER_LEFT);
+                        label.setMinWidth(0);
+                        label.setMaxWidth(Double.MAX_VALUE);
+                        HBox.setHgrow(label, Priority.ALWAYS);
+                        removeButton.setId("icon-button");
+                        removeButton.getStyleClass().add("preferences-currency-remove");
+                        Accessibility.setName(removeButton, Res.get("shared.remove"));
+                    }
+
+                    @Override
+                    public void updateItem(final CryptoCurrency item, boolean empty) {
+                        super.updateItem(item, empty);
+                        if (item != null && !empty) {
+                            label.setText(item.getNameAndCode());
+                            removeButton.setOnAction(e -> {
+                                if (item.equals(preferences.getPreferredTradeCurrency())) {
+                                    new Popup().warning(Res.get("setting.preferences.cannotRemovePrefCurrency")).show();
+                                } else {
+                                    preferences.removeCryptoCurrency(item);
+                                    if (!allCryptoCurrencies.contains(item)) {
+                                        allCryptoCurrencies.add(item);
+                                        allCryptoCurrencies.sort(TradeCurrency::compareTo);
+                                    }
+                                }
+                            });
+                            setGraphic(pane);
+                            setAccessibleText(label.getText());
+                        } else {
+                            setGraphic(null);
+                            setAccessibleText(null);
+                            removeButton.setOnAction(null);
+                        }
+                    }
+                };
+            }
+        });
+
+        traditionalCurrenciesComboBox = addComboBox(currenciesGridPane, displayCurrenciesGridRowIndex + listRowSpan);
+        GridPane.setValignment(traditionalCurrenciesComboBox, VPos.TOP);
+        traditionalCurrenciesComboBox.setPromptText(Res.get("setting.preferences.addTraditional"));
+        traditionalCurrenciesComboBox.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(final TraditionalCurrency item, boolean empty) {
+                super.updateItem(item, empty);
+                this.setVisible(item != null || !empty);
+
+                if (empty || item == null) {
+                    setText(Res.get("setting.preferences.addTraditional"));
+                } else {
+                    setText(item.getNameAndCode());
+                }
+            }
+        });
+        traditionalCurrenciesComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(TraditionalCurrency tradeCurrency) {
+                return tradeCurrency.getNameAndCode();
+            }
+
+            @Override
+            public TraditionalCurrency fromString(String s) {
+                return null;
+            }
+        });
+
+        cryptoCurrenciesComboBox = addComboBox(currenciesGridPane, displayCurrenciesGridRowIndex + listRowSpan);
+        GridPane.setColumnIndex(cryptoCurrenciesComboBox, 1);
+        GridPane.setValignment(cryptoCurrenciesComboBox, VPos.TOP);
+        GridPane.setMargin(cryptoCurrenciesComboBox, new Insets(Layout.FLOATING_LABEL_DISTANCE,
+                0, 0, 20));
+        cryptoCurrenciesComboBox.setPromptText(Res.get("setting.preferences.addCrypto"));
+        cryptoCurrenciesComboBox.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(final CryptoCurrency item, boolean empty) {
+                super.updateItem(item, empty);
+                this.setVisible(item != null || !empty);
+
+
+                if (empty || item == null) {
+                    setText(Res.get("setting.preferences.addCrypto"));
+                } else {
+                    setText(item.getNameAndCode());
+                }
+            }
+        });
+        cryptoCurrenciesComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(CryptoCurrency tradeCurrency) {
+                return tradeCurrency.getNameAndCode();
+            }
+
+            @Override
+            public CryptoCurrency fromString(String s) {
+                return null;
+            }
+        });
+
+        displayCurrenciesGridRowIndex += listRowSpan;
+    }
+
+    private void initializeDisplayOptions() {
+        TitledGroupBg titledGroupBg = addTitledGroupBg(optionsGridPane, ++gridRow, 7, Res.get("setting.preferences.displayOptions"), Layout.GROUP_DISTANCE);
+        GridPane.setColumnSpan(titledGroupBg, 1);
+
+        showOwnOffersInOfferBook = addSlideToggleButton(optionsGridPane, gridRow, Res.get("setting.preferences.showOwnOffers"), Layout.FIRST_ROW_AND_GROUP_DISTANCE + 10);
+        useAnimations = addSlideToggleButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.useAnimations"));
+        useDarkMode = addSlideToggleButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.useDarkMode"));
+        sortMarketCurrenciesNumerically = addSlideToggleButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.sortWithNumOffers"));
+        hideNonAccountPaymentMethodsToggle = addSlideToggleButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.onlyShowPaymentMethodsFromAccount"));
+        useSoftwareRendering = new AutoTooltipSlideToggleButton();
+        useSoftwareRendering.setText(Res.get("setting.preferences.useSoftwareRendering"));
+        InfoAutoTooltipLabel useSoftwareRenderingInfo = new InfoAutoTooltipLabel("", FontAwesomeIcon.INFO_CIRCLE, ContentDisplay.RIGHT,
+                Res.get("setting.preferences.useSoftwareRendering.info"), 420);
+        HBox useSoftwareRenderingBox = new HBox(6, useSoftwareRendering, useSoftwareRenderingInfo);
+        useSoftwareRenderingBox.setAlignment(Pos.CENTER_LEFT);
+        GridPane.setRowIndex(useSoftwareRenderingBox, ++gridRow);
+        optionsGridPane.getChildren().add(useSoftwareRenderingBox);
+        //denyApiTakerToggle = addSlideToggleButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.denyApiTaker")); // TODO: re-enable?
+        //notifyOnPreReleaseToggle = addSlideToggleButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.notifyOnPreRelease"));
+        resetDontShowAgainButton = addButton(optionsGridPane, ++gridRow, Res.get("setting.preferences.resetAllFlags"), 12);
+        resetDontShowAgainButton.getStyleClass().add("compact-button");
+        resetDontShowAgainButton.setMaxWidth(Double.MAX_VALUE);
+        GridPane.setHgrow(resetDontShowAgainButton, Priority.ALWAYS);
+        GridPane.setColumnIndex(resetDontShowAgainButton, 0);
+    }
+
+    private void initializeAutoConfirmOptions() {
+        GridPane autoConfirmGridPane = new GridPane();
+        GridPane.setHgrow(autoConfirmGridPane, Priority.ALWAYS);
+        if (!hideXmrAutoConf) root.add(autoConfirmGridPane, 2, displayCurrenciesGridRowIndex, 2, 10);
+        addTitledGroupBg(autoConfirmGridPane, 0, 4, Res.get("setting.preferences.autoConfirmXMR"), 0);
+        int localRowIndex = 0;
+        autoConfirmXmrToggle = addSlideToggleButton(autoConfirmGridPane, localRowIndex, Res.get("setting.preferences.autoConfirmEnabled"), Layout.FIRST_ROW_DISTANCE);
+
+        autoConfRequiredConfirmationsTf = addInputTextField(autoConfirmGridPane, ++localRowIndex, Res.get("setting.preferences.autoConfirmRequiredConfirmations"));
+        autoConfRequiredConfirmationsTf.setValidator(new IntegerValidator(1, DevEnv.isDevMode() ? 100000000 : 1000));
+
+        autoConfTradeLimitTf = addInputTextField(autoConfirmGridPane, ++localRowIndex, Res.get("setting.preferences.autoConfirmMaxTradeSize"));
+        autoConfTradeLimitTf.setValidator(new XmrValidator());
+
+        autoConfServiceAddressTf = addInputTextField(autoConfirmGridPane, ++localRowIndex, Res.get("setting.preferences.autoConfirmServiceAddresses"));
+        GridPane.setHgrow(autoConfServiceAddressTf, Priority.ALWAYS);
+        if (!hideXmrAutoConf) displayCurrenciesGridRowIndex += 4;
+
+        autoConfServiceAddressListener = (observable, oldValue, newValue) -> {
+            if (!newValue.equals(oldValue)) {
+
+                RegexValidator onionRegex = RegexValidatorFactory.onionAddressRegexValidator();
+                RegexValidator localhostRegex = RegexValidatorFactory.localhostAddressRegexValidator();
+                RegexValidator localnetRegex = RegexValidatorFactory.localnetAddressRegexValidator();
+
+                List<String> serviceAddressesRaw = Arrays.asList(StringUtils.deleteWhitespace(newValue).split(","));
+
+                // revert to default service providers when user empties the list
+                if (serviceAddressesRaw.size() == 1 && serviceAddressesRaw.get(0).isEmpty()) {
+                    serviceAddressesRaw = preferences.getDefaultXmrTxProofServices();
+                }
+
+                // we must always communicate with XMR explorer API securely
+                // if *.onion hostname, we use Tor normally
+                // if localhost, LAN address, or *.local FQDN we use HTTP without Tor
+                // otherwise we enforce https:// for any clearnet FQDN hostname
+                List<String> serviceAddressesParsed = new ArrayList<String>();
+                serviceAddressesRaw.forEach((addr) -> {
+                    addr = addr.replaceAll("http://", "").replaceAll("https://", "");
+                    if (onionRegex.validate(addr).isValid) {
+                        log.info("Using Tor for onion hostname: {}", addr);
+                        serviceAddressesParsed.add(addr);
+                    } else if (localhostRegex.validate(addr).isValid) {
+                        log.info("Using HTTP without Tor for Loopback address: {}", addr);
+                        serviceAddressesParsed.add("http://" + addr);
+                    } else if (localnetRegex.validate(addr).isValid) {
+                        log.info("Using HTTP without Tor for LAN address: {}", addr);
+                        serviceAddressesParsed.add("http://" + addr);
+                    } else {
+                        log.info("Using HTTPS with Tor for Clearnet address: {}", addr);
+                        serviceAddressesParsed.add("https://" + addr);
+                    }
+                });
+
+                preferences.setAutoConfServiceAddresses("XMR", serviceAddressesParsed);
+            }
+        };
+
+        autoConfTradeLimitListener = (observable, oldValue, newValue) -> {
+            if (!newValue.equals(oldValue) && autoConfTradeLimitTf.getValidator().validate(newValue).isValid) {
+                try {
+                    preferences.setAutoConfTradeLimit("XMR", HavenoUtils.parseXmr(newValue).longValueExact());
+                } catch (NumberFormatException e) {
+                    // ignore unparseable input; the field validator flags it
+                }
+            }
+        };
+
+        autoConfServiceAddressFocusOutListener = (observable, oldValue, newValue) -> {
+            if (oldValue && !newValue) {
+                log.info("Service address focus out, check and re-display default option");
+                if (autoConfServiceAddressTf.getText().isEmpty()) {
+                    preferences.findAutoConfirmSettings("XMR").ifPresent(autoConfirmSettings -> {
+                        List<String> serviceAddresses = autoConfirmSettings.getServiceAddresses();
+                        autoConfServiceAddressTf.setText(String.join(", ", serviceAddresses));
+                    });
+                }
+            }
+        };
+
+        // We use a focus out handler to not update the data during entering text as that might lead to lower than
+        // intended numbers which could be lead in the worst case to auto completion as number of confirmations is
+        // reached. E.g. user had value 10 and wants to change it to 15 and deletes the 0, so current value would be 1.
+        // If the service result just comes in at that moment the service might be considered complete as 1 is at that
+        // moment used. We read the data just in time to make changes more flexible, otherwise user would need to
+        // restart to apply changes from the number of confirmations settings.
+        // Other fields like service addresses and limits are not affected and are taken at service start and cannot be
+        // changed for already started services.
+        autoConfRequiredConfirmationsFocusOutListener = (observable, oldValue, newValue) -> {
+            if (oldValue && !newValue) {
+                String txt = autoConfRequiredConfirmationsTf.getText();
+                if (autoConfRequiredConfirmationsTf.getValidator().validate(txt).isValid) {
+                    int requiredConfirmations = Integer.parseInt(txt);
+                    preferences.setAutoConfRequiredConfirmations("XMR", requiredConfirmations);
+                } else {
+                    preferences.findAutoConfirmSettings("XMR")
+                            .ifPresent(e -> autoConfRequiredConfirmationsTf
+                                    .setText(String.valueOf(e.getRequiredConfirmations())));
+                }
+            }
+        };
+
+        filterChangeListener = (observable, oldValue, newValue) -> {
+            autoConfirmGridPane.setDisable(newValue != null && newValue.isDisableAutoConf());
+        };
+        autoConfirmGridPane.setDisable(filterManager.getFilter() != null && filterManager.getFilter().isDisableAutoConf());
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Activate
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void activateGeneralOptions() {
+        ignoreTradersListInputTextField.setText(String.join(", ", preferences.getIgnoreTradersList()));
+        /* referralIdService.getOptionalReferralId().ifPresent(referralId -> referralIdInputTextField.setText(referralId));
+        referralIdInputTextField.setPromptText(Res.get("setting.preferences.refererId.prompt"));*/
+        clearDataAfterDaysInputTextField.setText(String.valueOf(preferences.getClearDataAfterDays()));
+        userLanguageComboBox.setItems(languageCodes);
+        userLanguageComboBox.getSelectionModel().select(preferences.getUserLanguage());
+        userLanguageComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(String code) {
+                return LanguageUtil.getDisplayName(code);
+            }
+
+            @Override
+            public String fromString(String string) {
+                return null;
+            }
+        });
+
+        userLanguageComboBox.setOnAction(e -> {
+            String selectedItem = userLanguageComboBox.getSelectionModel().getSelectedItem();
+            if (selectedItem != null) {
+                preferences.setUserLanguage(selectedItem);
+                new Popup().information(Res.get("settings.preferences.languageChange"))
+                        .closeButtonText(Res.get("shared.ok"))
+                        .show();
+
+                if (model.needsSupportLanguageWarning()) {
+                    new Popup().warning(Res.get("settings.preferences.supportLanguageWarning",
+                            model.getArbitrationLanguages()))
+                            .closeButtonText(Res.get("shared.ok"))
+                            .show();
+                }
+            }
+        });
+
+        userCountryComboBox.setItems(countries);
+        userCountryComboBox.getSelectionModel().select(preferences.getUserCountry());
+        userCountryComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(Country country) {
+                return CountryUtil.getNameByCode(country.code);
+            }
+
+            @Override
+            public Country fromString(String string) {
+                return null;
+            }
+        });
+        userCountryComboBox.setOnAction(e -> {
+            Country country = userCountryComboBox.getSelectionModel().getSelectedItem();
+            if (country != null) {
+                preferences.setUserCountry(country);
+            }
+        });
+
+        xmrExplorerTextField.setText(preferences.getBlockChainExplorer().name);
+
+        resetPriceDeviation();
+        deviationInputTextField.textProperty().addListener(deviationListener);
+        deviationInputTextField.focusedProperty().addListener(deviationFocusedListener);
+        deviationInputTextField.setOnAction(event -> applyPriceDeviation());
+
+        ignoreTradersListInputTextField.textProperty().addListener(ignoreTradersListListener);
+        //referralIdInputTextField.textProperty().addListener(referralIdListener);
+        clearDataAfterDaysInputTextField.textProperty().addListener(clearDataAfterDaysListener);
+    }
+
+    private void activateDisplayCurrencies() {
+        preferredTradeCurrencyComboBox.setAutocompleteItems(tradeCurrencies);
+        preferredTradeCurrencyComboBox.getSelectionModel().select(preferences.getPreferredTradeCurrency());
+        preferredTradeCurrencyComboBox.getEditor().setText(
+                preferredTradeCurrencyComboBox.getConverter().toString(preferences.getPreferredTradeCurrency()));
+        preferredTradeCurrencyComboBox.setOnChangeConfirmed(e -> {
+            TradeCurrency selectedItem = preferredTradeCurrencyComboBox.getSelectionModel().getSelectedItem();
+            if (selectedItem != null)
+                preferences.setPreferredTradeCurrency(selectedItem);
+        });
+
+        traditionalCurrenciesComboBox.setItems(allTraditionalCurrencies);
+        traditionalCurrenciesListView.setItems(traditionalCurrencies);
+        traditionalCurrenciesComboBox.setOnHiding(e -> {
+            TraditionalCurrency selectedItem = traditionalCurrenciesComboBox.getSelectionModel().getSelectedItem();
+            if (selectedItem != null) {
+                preferences.addTraditionalCurrency(selectedItem);
+                if (allTraditionalCurrencies.contains(selectedItem)) {
+                    UserThread.execute(() -> {
+                        traditionalCurrenciesComboBox.getSelectionModel().clearSelection();
+                        allTraditionalCurrencies.remove(selectedItem);
+
+                    });
+                }
+            }
+        });
+        cryptoCurrenciesComboBox.setItems(allCryptoCurrencies);
+        cryptoCurrenciesListView.setItems(cryptoCurrencies);
+        cryptoCurrenciesComboBox.setOnHiding(e -> {
+            CryptoCurrency selectedItem = cryptoCurrenciesComboBox.getSelectionModel().getSelectedItem();
+            if (selectedItem != null) {
+                preferences.addCryptoCurrency(selectedItem);
+                if (allCryptoCurrencies.contains(selectedItem)) {
+                    UserThread.execute(() -> {
+                        cryptoCurrenciesComboBox.getSelectionModel().clearSelection();
+                        allCryptoCurrencies.remove(selectedItem);
+
+                    });
+                }
+            }
+        });
+    }
+
+    private void activateDisplayPreferences() {
+        showOwnOffersInOfferBook.setSelected(preferences.isShowOwnOffersInOfferBook());
+        showOwnOffersInOfferBook.setOnAction(e -> preferences.setShowOwnOffersInOfferBook(showOwnOffersInOfferBook.isSelected()));
+
+        useAnimations.setSelected(preferences.isUseAnimations());
+        useAnimations.setOnAction(e -> preferences.setUseAnimations(useAnimations.isSelected()));
+
+        useSoftwareRendering.setSelected(preferences.isUseSoftwareRendering());
+        useSoftwareRendering.setOnAction(e -> {
+            boolean selected = useSoftwareRendering.isSelected();
+            new Popup().information(Res.get("settings.net.needRestart"))
+                    .actionButtonText(Res.get("shared.applyAndShutDown"))
+                    .onAction(() -> {
+                        if (preferences.setUseSoftwareRendering(selected)) {
+                            UserThread.runAfter(HavenoApp.getShutDownHandler(), 500, TimeUnit.MILLISECONDS);
+                        } else {
+                            useSoftwareRendering.setSelected(preferences.isUseSoftwareRendering());
+                            new Popup().warning(Res.get("setting.preferences.useSoftwareRendering.saveFailed")).show();
+                        }
+                    })
+                    .closeButtonText(Res.get("shared.cancel"))
+                    .onClose(() -> useSoftwareRendering.setSelected(preferences.isUseSoftwareRendering()))
+                    .show();
+        });
+
+        useDarkMode.setSelected(preferences.getCssTheme() == 1);
+        useDarkMode.setOnAction(e -> preferences.setCssTheme(useDarkMode.isSelected()));
+        cssThemeListener = (observable, oldValue, newValue) -> useDarkMode.setSelected(newValue.intValue() == 1);
+        preferences.getCssThemeProperty().addListener(cssThemeListener);
+
+        sortMarketCurrenciesNumerically.setSelected(preferences.isSortMarketCurrenciesNumerically());
+        sortMarketCurrenciesNumerically.setOnAction(e -> preferences.setSortMarketCurrenciesNumerically(sortMarketCurrenciesNumerically.isSelected()));
+
+        boolean disableToggle = false;
+        if (user.getPaymentAccounts() != null) {
+            Set<PaymentMethod> supportedPaymentMethods = user.getPaymentAccounts().stream()
+                    .map(PaymentAccount::getPaymentMethod).collect(Collectors.toSet());
+            disableToggle = supportedPaymentMethods.isEmpty();
+        }
+        hideNonAccountPaymentMethodsToggle.setSelected(preferences.isHideNonAccountPaymentMethods() && !disableToggle);
+        hideNonAccountPaymentMethodsToggle.setOnAction(e -> preferences.setHideNonAccountPaymentMethods(hideNonAccountPaymentMethodsToggle.isSelected()));
+        hideNonAccountPaymentMethodsToggle.setDisable(disableToggle);
+
+        //denyApiTakerToggle.setSelected(preferences.isDenyApiTaker());
+        //denyApiTakerToggle.setOnAction(e -> preferences.setDenyApiTaker(denyApiTakerToggle.isSelected()));
+
+        //notifyOnPreReleaseToggle.setSelected(preferences.isNotifyOnPreRelease());
+        //notifyOnPreReleaseToggle.setOnAction(e -> preferences.setNotifyOnPreRelease(notifyOnPreReleaseToggle.isSelected()));
+
+        resetDontShowAgainButton.setOnAction(e -> preferences.resetDontShowAgain());
+
+        editCustomBtcExplorer.setOnAction(e -> {
+            EditCustomExplorerWindow urlWindow = new EditCustomExplorerWindow("XMR",
+                    preferences.getBlockChainExplorer(), preferences.getBlockChainExplorers());
+            urlWindow
+                    .actionButtonText(Res.get("shared.save"))
+                    .onAction(() -> {
+                        preferences.setBlockChainExplorer(urlWindow.getEditedBlockChainExplorer());
+                        xmrExplorerTextField.setText(preferences.getBlockChainExplorer().name);
+                    })
+                    .closeButtonText(Res.get("shared.cancel"))
+                    .onClose(urlWindow::hide)
+                    .show();
+        });
+
+        // We use opposite property (useStandbyMode) in preferences to have the default value (false) set as we want it,
+        // so users who update gets set avoidStandbyMode=true (useStandbyMode=false)
+        if (displayStandbyModeFeature) {
+            avoidStandbyMode.setSelected(!preferences.isUseStandbyMode());
+            avoidStandbyMode.setOnAction(e -> preferences.setUseStandbyMode(!avoidStandbyMode.isSelected()));
+        } else {
+            preferences.setUseStandbyMode(false);
+        }
+
+        useSoundForNotifications.setSelected(preferences.isUseSoundForNotifications());
+        useSoundForNotifications.setOnAction(e -> preferences.setUseSoundForNotifications(useSoundForNotifications.isSelected()));
+
+        useNativeXmrWallet.setSelected(preferences.isUseNativeXmrWallet());
+        useNativeXmrWallet.setOnAction(e -> {
+            boolean selected = useNativeXmrWallet.isSelected();
+            new Popup().information(Res.get("settings.net.needRestart"))
+                    .actionButtonText(Res.get("shared.applyAndShutDown"))
+                    .onAction(() -> {
+                        preferences.setUseNativeXmrWallet(selected);
+                        UserThread.runAfter(HavenoApp.getShutDownHandler(), 500, TimeUnit.MILLISECONDS);
+                    })
+                    .closeButtonText(Res.get("shared.cancel"))
+                    .onClose(() -> useNativeXmrWallet.setSelected(preferences.isUseNativeXmrWallet()))
+                    .show();
+        });
+    }
+
+    private void activateAutoConfirmPreferences() {
+        preferences.findAutoConfirmSettings("XMR").ifPresent(autoConfirmSettings -> {
+            autoConfirmXmrToggle.setSelected(autoConfirmSettings.isEnabled());
+            autoConfRequiredConfirmationsTf.setText(String.valueOf(autoConfirmSettings.getRequiredConfirmations()));
+            autoConfTradeLimitTf.setText(HavenoUtils.formatXmr(autoConfirmSettings.getTradeLimit()));
+            autoConfServiceAddressTf.setText(String.join(", ", autoConfirmSettings.getServiceAddresses()));
+            autoConfRequiredConfirmationsTf.focusedProperty().addListener(autoConfRequiredConfirmationsFocusOutListener);
+            autoConfTradeLimitTf.textProperty().addListener(autoConfTradeLimitListener);
+            autoConfServiceAddressTf.textProperty().addListener(autoConfServiceAddressListener);
+            autoConfServiceAddressTf.focusedProperty().addListener(autoConfServiceAddressFocusOutListener);
+            autoConfirmXmrToggle.setOnAction(e -> {
+                preferences.setAutoConfEnabled(autoConfirmSettings.getCurrencyCode(), autoConfirmXmrToggle.isSelected());
+            });
+            filterManager.filterProperty().addListener(filterChangeListener);
+        });
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Deactivate
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void deactivateGeneralOptions() {
+        //selectBaseCurrencyNetworkComboBox.setOnAction(null);
+        userLanguageComboBox.setOnAction(null);
+        userCountryComboBox.setOnAction(null);
+        editCustomBtcExplorer.setOnAction(null);
+        onNavigationAway();
+        deviationInputTextField.textProperty().removeListener(deviationListener);
+        deviationInputTextField.focusedProperty().removeListener(deviationFocusedListener);
+        deviationInputTextField.setOnAction(null);
+        ignoreTradersListInputTextField.textProperty().removeListener(ignoreTradersListListener);
+        //referralIdInputTextField.textProperty().removeListener(referralIdListener);
+        clearDataAfterDaysInputTextField.textProperty().removeListener(clearDataAfterDaysListener);
+    }
+
+    private void deactivateDisplayCurrencies() {
+        preferredTradeCurrencyComboBox.setOnHidden(null);
+    }
+
+    private void deactivateDisplayPreferences() {
+        useAnimations.setOnAction(null);
+        useSoftwareRendering.setOnAction(null);
+        useDarkMode.setOnAction(null);
+        preferences.getCssThemeProperty().removeListener(cssThemeListener);
+        sortMarketCurrenciesNumerically.setOnAction(null);
+        hideNonAccountPaymentMethodsToggle.setOnAction(null);
+        //denyApiTakerToggle.setOnAction(null);
+        //notifyOnPreReleaseToggle.setOnAction(null);
+        showOwnOffersInOfferBook.setOnAction(null);
+        resetDontShowAgainButton.setOnAction(null);
+        if (displayStandbyModeFeature) {
+            avoidStandbyMode.setOnAction(null);
+        }
+        useSoundForNotifications.setOnAction(null);
+        useNativeXmrWallet.setOnAction(null);
+    }
+
+    private void deactivateAutoConfirmPreferences() {
+        preferences.findAutoConfirmSettings("XMR").ifPresent(autoConfirmSettings -> {
+            autoConfirmXmrToggle.setOnAction(null);
+            autoConfTradeLimitTf.textProperty().removeListener(autoConfTradeLimitListener);
+            autoConfServiceAddressTf.textProperty().removeListener(autoConfServiceAddressListener);
+            autoConfServiceAddressTf.focusedProperty().removeListener(autoConfServiceAddressFocusOutListener);
+            autoConfRequiredConfirmationsTf.focusedProperty().removeListener(autoConfRequiredConfirmationsFocusOutListener);
+            filterManager.filterProperty().removeListener(filterChangeListener);
+        });
+    }
+}
