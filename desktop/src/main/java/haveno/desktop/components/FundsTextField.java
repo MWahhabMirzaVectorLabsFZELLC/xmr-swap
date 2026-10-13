@@ -1,0 +1,97 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.components;
+
+import haveno.common.UserThread;
+import haveno.common.util.Utilities;
+import haveno.core.locale.Res;
+import haveno.desktop.util.Accessibility;
+import haveno.desktop.util.GUIUtil;
+import haveno.desktop.util.Layout;
+import javafx.beans.binding.Bindings;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
+import javafx.scene.Node;
+import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
+import javafx.scene.layout.AnchorPane;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class FundsTextField extends InfoTextField {
+    public static final Logger log = LoggerFactory.getLogger(FundsTextField.class);
+
+    private final StringProperty fundsStructure = new SimpleStringProperty();
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+
+    public FundsTextField() {
+        super();
+        textField.textProperty().unbind();
+        // append the funds structure only once both parts are known, avoiding a "(null)" placeholder
+        textField.textProperty().bind(Bindings.createStringBinding(
+                () -> textProperty().get() == null || fundsStructure.get() == null
+                        ? textProperty().get()
+                        : textProperty().get() + " " + fundsStructure.get(),
+                textProperty(), fundsStructure));
+
+        Label copyLabel = new Label();
+        copyLabel.setLayoutY(Layout.FLOATING_ICON_Y);
+        copyLabel.getStyleClass().addAll("icon", "highlight");
+        Tooltip.install(copyLabel, new Tooltip(Res.get("shared.copyToClipboard")));
+        copyLabel.setGraphic(GUIUtil.getCopyIcon());
+        copyLabel.setOnMouseClicked(e -> {
+            String text = getText();
+            if (text != null && text.length() > 0) {
+                String copyText;
+                String[] strings = text.split(" ");
+                if (strings.length > 1)
+                    copyText = strings[0]; // exclude the BTC postfix
+                else
+                    copyText = text;
+
+                Utilities.copyToClipboard(copyText);
+
+                // show copied tooltip
+                Tooltip tp = new Tooltip(Res.get("shared.copiedToClipboard"));
+                Node node = (Node) e.getSource();
+                UserThread.runAfter(() -> tp.hide(), 1);
+                tp.show(node, e.getScreenX() + Layout.PADDING, e.getScreenY() + Layout.PADDING);
+            }
+        });
+
+        Accessibility.asButton(copyLabel, Res.get("shared.copyToClipboard"));
+
+        AnchorPane.setRightAnchor(copyLabel, 30.0);
+        AnchorPane.setRightAnchor(infoIcon, 62.0);
+        AnchorPane.setRightAnchor(textField, 55.0);
+
+        getChildren().add(copyLabel);
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Getters/Setters
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public void setFundsStructure(String fundsStructure) {
+        this.fundsStructure.set(fundsStructure);
+    }
+}

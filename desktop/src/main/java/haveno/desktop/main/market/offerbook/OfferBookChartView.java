@@ -1,0 +1,935 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.main.market.offerbook;
+
+import com.google.inject.Inject;
+import com.google.inject.name.Named;
+import com.jfoenix.controls.JFXTabPane;
+import haveno.common.Timer;
+import haveno.common.UserThread;
+import haveno.common.config.Config;
+import haveno.common.util.Tuple3;
+import haveno.common.util.Tuple4;
+import haveno.core.locale.CurrencyUtil;
+import haveno.core.locale.Res;
+import haveno.core.monetary.Volume;
+import haveno.core.offer.Offer;
+import haveno.core.offer.OfferDirection;
+import haveno.core.util.FormattingUtils;
+import haveno.core.util.VolumeUtil;
+import haveno.core.util.coin.CoinFormatter;
+import haveno.desktop.common.view.ActivatableViewAndModel;
+import haveno.desktop.common.view.FxmlView;
+import haveno.desktop.components.AutoTooltipButton;
+import haveno.desktop.components.AutoTooltipLabel;
+import haveno.desktop.components.AutoTooltipTableColumn;
+import haveno.desktop.components.AutocompleteComboBox;
+import haveno.desktop.components.ColoredDecimalPlacesWithZerosText;
+import haveno.desktop.components.PeerInfoIconSmall;
+import haveno.desktop.main.offer.offerbook.OfferBookListItem;
+import haveno.desktop.util.CurrencyListItem;
+import haveno.desktop.util.DisplayUtils;
+import static haveno.desktop.util.FormBuilder.addTopLabelAutocompleteComboBox;
+import haveno.desktop.util.GUIUtil;
+import haveno.network.p2p.NodeAddress;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import javafx.beans.InvalidationListener;
+import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
+import javafx.collections.ListChangeListener;
+import javafx.geometry.Bounds;
+import javafx.geometry.Insets;
+import javafx.geometry.Point2D;
+import javafx.geometry.Pos;
+import javafx.geometry.Side;
+import javafx.scene.Node;
+import javafx.scene.chart.AreaChart;
+import javafx.scene.chart.Axis;
+import javafx.scene.chart.NumberAxis;
+import javafx.scene.chart.XYChart;
+import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.Label;
+import javafx.scene.control.SingleSelectionModel;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TableCell;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
+import javafx.scene.layout.AnchorPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+import javafx.scene.shape.Line;
+import javafx.util.Callback;
+import javafx.util.StringConverter;
+import org.fxmisc.easybind.EasyBind;
+import org.fxmisc.easybind.Subscription;
+
+@FxmlView
+public class OfferBookChartView extends ActivatableViewAndModel<VBox, OfferBookChartViewModel> {
+    private final boolean useDevPrivilegeKeys;
+
+    private NumberAxis xAxis;
+    private NumberAxis yAxis;
+    private XYChart.Series<Number, Number> seriesBuy, seriesSell;
+    private final CoinFormatter formatter;
+    private TableView<OfferListItem> buyOfferTableView;
+    private TableView<OfferListItem> sellOfferTableView;
+    private AreaChart<Number, Number> areaChart;
+    private AnchorPane chartPane;
+    private Pane deviationScalePane;
+    private Pane gridLinesPane;
+    private boolean chartOverlaysRedrawScheduled;
+    private AutocompleteComboBox<CurrencyListItem> currencyComboBox;
+    private Subscription tradeCurrencySubscriber;
+    private final StringProperty volumeSellColumnLabel = new SimpleStringProperty();
+    private final StringProperty volumeBuyColumnLabel = new SimpleStringProperty();
+    private final StringProperty amountSellColumnLabel = new SimpleStringProperty();
+    private final StringProperty amountBuyColumnLabel = new SimpleStringProperty();
+    private final StringProperty priceColumnLabel = new SimpleStringProperty();
+    private AutoTooltipButton sellButton;
+    private AutoTooltipButton buyButton;
+    private ChangeListener<Number> selectedTabIndexListener;
+    private SingleSelectionModel<Tab> tabPaneSelectionModel;
+    private Label sellHeaderLabel, buyHeaderLabel;
+    private ChangeListener<OfferListItem> sellTableRowSelectionListener, buyTableRowSelectionListener;
+    private ListChangeListener<OfferBookListItem> changeListener;
+    private ListChangeListener<CurrencyListItem> currencyListItemsListener;
+    private final double dataLimitFactor = 3;
+    private final double initialOfferTableViewHeight = 83; // decrease as MainView's content-pane's top anchor increases
+    private ChangeListener<Number> priceFeedUpdateCounterListener;
+    private Timer priceRefreshTimer;
+
+    // Fixed axis scale used while the chart has no data, so the scales don't jump (see updateChartAxisRanging).
+    private static final double EMPTY_AXIS_UPPER_BOUND = 4;
+    private static final int EMPTY_AXIS_TICK_INTERVALS = 4;
+
+    // Heights (px) of the deviation scale's tick marks above the plot
+    private static final int DEVIATION_TICK_HEIGHT = 5;        // labeled ticks
+    private static final int DEVIATION_MINOR_TICK_HEIGHT = 4;  // unlabeled midway ticks
+    private static final int DEVIATION_LABEL_GAP = 1;          // px between the labels and their ticks (0 = touching)
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor, lifecycle
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Inject
+    public OfferBookChartView(OfferBookChartViewModel model,
+                              @Named(FormattingUtils.BTC_FORMATTER_KEY) CoinFormatter formatter,
+                              @Named(Config.USE_DEV_PRIVILEGE_KEYS) boolean useDevPrivilegeKeys) {
+        super(model);
+        this.formatter = formatter;
+        this.useDevPrivilegeKeys = useDevPrivilegeKeys;
+    }
+
+    @Override
+    public void initialize() {
+        createListener();
+
+        final Tuple3<VBox, Label, AutocompleteComboBox<CurrencyListItem>> currencyComboBoxTuple = addTopLabelAutocompleteComboBox(Res.get("shared.currency"), 0);
+        this.currencyComboBox = currencyComboBoxTuple.third;
+        this.currencyComboBox.setCellFactory(GUIUtil.getCurrencyListItemCellFactory(Res.get("shared.oneOffer"),
+                Res.get("shared.multipleOffers")));
+        this.currencyComboBox.getStyleClass().add("input-with-border");
+
+        createChart();
+
+        VBox.setMargin(chartPane, new Insets(0, 0, 5, 0));
+
+        Tuple4<TableView<OfferListItem>, VBox, Button, Label> tupleBuy = getOfferTable(OfferDirection.BUY);
+        Tuple4<TableView<OfferListItem>, VBox, Button, Label> tupleSell = getOfferTable(OfferDirection.SELL);
+        buyOfferTableView = tupleBuy.first;
+        sellOfferTableView = tupleSell.first;
+
+        sellButton = (AutoTooltipButton) tupleBuy.third;
+        buyButton = (AutoTooltipButton) tupleSell.third;
+
+        sellHeaderLabel = tupleBuy.fourth;
+        buyHeaderLabel = tupleSell.fourth;
+
+        HBox bottomHBox = new HBox();
+        bottomHBox.setSpacing(10);
+        bottomHBox.setAlignment(Pos.CENTER);
+        VBox.setMargin(bottomHBox, new Insets(-5, 0, 0, 0));
+        VBox.setVgrow(bottomHBox, Priority.ALWAYS); // fill remaining height so the cards end at the view's bottom padding
+        HBox.setHgrow(tupleBuy.second, Priority.ALWAYS);
+        HBox.setHgrow(tupleSell.second, Priority.ALWAYS);
+        tupleBuy.second.setUserData(OfferDirection.BUY.name());
+        tupleSell.second.setUserData(OfferDirection.SELL.name());
+        bottomHBox.getChildren().addAll(tupleSell.second, tupleBuy.second);
+
+        root.getChildren().addAll(currencyComboBoxTuple.first, chartPane, bottomHBox);
+    }
+
+    @Override
+    protected void activate() {
+        // root.getParent() is null at initialize
+        tabPaneSelectionModel = GUIUtil.getParentOfType(root, JFXTabPane.class).getSelectionModel();
+        selectedTabIndexListener = (observable, oldValue, newValue) -> model.setSelectedTabIndex((int) newValue);
+
+        model.setSelectedTabIndex(tabPaneSelectionModel.getSelectedIndex());
+        tabPaneSelectionModel.selectedIndexProperty().addListener(selectedTabIndexListener);
+
+        currencyComboBox.setConverter(new CurrencyListItemStringConverter(currencyComboBox));
+        currencyComboBox.getEditor().getStyleClass().add("combo-box-editor-bold");
+
+        currencyComboBox.setAutocompleteItems(model.getCurrencyListItems());
+        currencyComboBox.setVisibleRowCount(10);
+
+        if (model.getSelectedCurrencyListItem().isPresent()) {
+            CurrencyListItem selectedItem = model.getSelectedCurrencyListItem().get();
+            currencyComboBox.getSelectionModel().select(model.getSelectedCurrencyListItem().get());
+            currencyComboBox.getEditor().setText(new CurrencyListItemStringConverter(currencyComboBox).toString(selectedItem));
+        }
+
+        currencyComboBox.setOnChangeConfirmed(e -> {
+            CurrencyListItem selectedItem = currencyComboBox.getSelectionModel().getSelectedItem();
+            if (selectedItem != null) {
+                model.onSetTradeCurrency(selectedItem.tradeCurrency);
+                UserThread.execute(() -> updateChartData());
+            }
+        });
+
+        model.currencyListItems.getObservableList().addListener(currencyListItemsListener);
+
+        model.getOfferBookListItems().addListener(changeListener);
+        tradeCurrencySubscriber = EasyBind.subscribe(model.selectedTradeCurrencyProperty,
+                tradeCurrency -> {
+                    String code = tradeCurrency.getCode();
+                    xAxis.setTickLabelFormatter(new StringConverter<>() {
+                        final int cryptoPrecision = 3;
+                        final DecimalFormat df = new DecimalFormat(",###");
+
+                        @Override
+                        public String toString(Number object) {
+                            try {
+                                final double doubleValue = (double) object;
+                                if (CurrencyUtil.isCryptoCurrency(model.getCurrencyCode())) {
+                                    final String withCryptoPrecision = FormattingUtils.formatRoundedDoubleWithPrecision(doubleValue, cryptoPrecision);
+                                    if (withCryptoPrecision.startsWith("0.0")) {
+                                        return FormattingUtils.formatRoundedDoubleWithPrecision(doubleValue, 8).replaceFirst("0+$", "");
+                                    } else {
+                                        return withCryptoPrecision.replaceFirst("0+$", "");
+                                    }
+                                } else {
+                                    return df.format(Double.parseDouble(FormattingUtils.formatRoundedDoubleWithPrecision(doubleValue, 0)));
+                                }
+                            } catch (IllegalArgumentException e) {
+                                log.error("Error converting number to string, tradeCurrency={}, number={}\n", code, object, e);
+                                return "NaN"; // TODO: occasionally getting invalid number
+                            }
+                        }
+
+                        @Override
+                        public Number fromString(String string) {
+                            return null;
+                        }
+                    });
+                    
+                    String viewBaseCurrencyCode = Res.getBaseCurrencyCode();
+                    String viewPriceCurrencyCode = code;
+
+                    sellHeaderLabel.setText(Res.get("market.offerBook.sellOffersHeaderLabel", viewBaseCurrencyCode));
+                    sellButton.updateText(Res.get("shared.sellCurrency", viewBaseCurrencyCode));
+                    sellButton.setGraphic(GUIUtil.getCurrencyIconWithBorder(viewBaseCurrencyCode));
+                    sellButton.setOnAction(e -> model.goToOfferView(OfferDirection.BUY));
+                    sellButton.setId("sell-button-big");
+
+                    buyHeaderLabel.setText(Res.get("market.offerBook.buyOffersHeaderLabel", viewBaseCurrencyCode));
+                    buyButton.updateText(Res.get( "shared.buyCurrency", viewBaseCurrencyCode));
+                    buyButton.setGraphic(GUIUtil.getCurrencyIconWithBorder(viewBaseCurrencyCode));
+                    buyButton.setOnAction(e -> model.goToOfferView(OfferDirection.SELL));
+                    buyButton.setId("buy-button-big");
+
+                    priceColumnLabel.set(Res.get("shared.priceWithCur", viewPriceCurrencyCode));
+
+                    xAxis.setLabel(CurrencyUtil.getPriceWithCurrencyCode(code));
+
+                    seriesBuy.setName(sellHeaderLabel.getText() + "   ");
+                    seriesSell.setName(buyHeaderLabel.getText());
+                });
+
+        buyOfferTableView.setItems(model.getTopBuyOfferList());
+        sellOfferTableView.setItems(model.getTopSellOfferList());
+
+        buyOfferTableView.getSelectionModel().selectedItemProperty().addListener(buyTableRowSelectionListener);
+        sellOfferTableView.getSelectionModel().selectedItemProperty().addListener(sellTableRowSelectionListener);
+
+        model.priceFeedService.updateCounterProperty().addListener(priceFeedUpdateCounterListener);
+
+        updateChartData();
+    }
+
+    static class CurrencyListItemStringConverter extends StringConverter<CurrencyListItem> {
+        private final ComboBox<CurrencyListItem> comboBox;
+
+        CurrencyListItemStringConverter(ComboBox<CurrencyListItem> comboBox) {
+            this.comboBox = comboBox;
+        }
+
+        @Override
+        public String toString(CurrencyListItem currencyItem) {
+            return currencyItem != null ? currencyItem.codeDashNameString() : "";
+        }
+
+        @Override
+        public CurrencyListItem fromString(String s) {
+            return comboBox.getItems().stream().
+                    filter(currencyItem -> currencyItem.codeDashNameString().equals(s)).
+                    findAny().orElse(null);
+        }
+    }
+
+    private void createListener() {
+        changeListener = c -> UserThread.execute(() -> updateChartData());
+
+        currencyListItemsListener = c -> {
+            if (model.getSelectedCurrencyListItem().isPresent())
+                currencyComboBox.getSelectionModel().select(model.getSelectedCurrencyListItem().get());
+        };
+
+        sellTableRowSelectionListener = (observable, oldValue, newValue) -> model.goToOfferView(OfferDirection.SELL);
+        buyTableRowSelectionListener = (observable, oldValue, newValue) -> model.goToOfferView(OfferDirection.BUY);
+
+        // Market prices update ~once per minute; refresh the prices, chart and tables.
+        // Debounced to collapse the burst of updates from a single price request cycle.
+        priceFeedUpdateCounterListener = (observable, oldValue, newValue) -> {
+            if (priceRefreshTimer == null) {
+                priceRefreshTimer = UserThread.runAfter(() -> {
+                    priceRefreshTimer = null;
+                    model.updateChartData();
+                    updateChartData();
+                }, 1);
+            }
+        };
+    }
+
+    @Override
+    protected void deactivate() {
+        model.getOfferBookListItems().removeListener(changeListener);
+        tabPaneSelectionModel.selectedIndexProperty().removeListener(selectedTabIndexListener);
+        model.currencyListItems.getObservableList().removeListener(currencyListItemsListener);
+        tradeCurrencySubscriber.unsubscribe();
+        buyOfferTableView.getSelectionModel().selectedItemProperty().removeListener(buyTableRowSelectionListener);
+        sellOfferTableView.getSelectionModel().selectedItemProperty().removeListener(sellTableRowSelectionListener);
+        model.priceFeedService.updateCounterProperty().removeListener(priceFeedUpdateCounterListener);
+        if (priceRefreshTimer != null) {
+            priceRefreshTimer.stop();
+            priceRefreshTimer = null;
+        }
+    }
+
+    private void createChart() {
+        xAxis = new NumberAxis();
+        xAxis.setForceZeroInRange(false);
+        xAxis.setAutoRanging(true);
+        xAxis.setTickMarkVisible(true);
+        xAxis.setMinorTickVisible(false);
+
+        yAxis = new NumberAxis();
+        yAxis.setForceZeroInRange(false);
+        yAxis.setSide(Side.RIGHT);
+        yAxis.setAutoRanging(true);
+        yAxis.setTickMarkVisible(true);
+        yAxis.setMinorTickVisible(false);
+        yAxis.getStyleClass().add("axisy");
+        yAxis.setLabel(CurrencyUtil.getOfferVolumeCode(Res.getBaseCurrencyCode()));
+
+        seriesBuy = new XYChart.Series<>();
+        seriesSell = new XYChart.Series<>();
+
+        areaChart = new AreaChart<>(xAxis, yAxis);
+        areaChart.setLegendVisible(false);
+        areaChart.setAnimated(false);
+        areaChart.setHorizontalGridLinesVisible(false); // draw the horizontal grid lines ourselves to fix flickering due to floating-point edge comparison
+        areaChart.setId("charts");
+        areaChart.setMinHeight(270);
+        areaChart.setPrefHeight(270);
+        areaChart.setCreateSymbols(true);
+        areaChart.setPadding(new Insets(0, 10, 0, 10));
+        areaChart.getData().addAll(List.of(seriesBuy, seriesSell));
+
+        chartPane = new AnchorPane();
+        chartPane.getStyleClass().add("chart-pane");
+
+        AnchorPane.setTopAnchor(areaChart, 24d);
+        AnchorPane.setBottomAnchor(areaChart, 10d);
+        AnchorPane.setLeftAnchor(areaChart, 10d);
+        AnchorPane.setRightAnchor(areaChart, 0d);
+
+        deviationScalePane = new Pane();
+        deviationScalePane.setMouseTransparent(true);
+        deviationScalePane.setPickOnBounds(false);
+        AnchorPane.setTopAnchor(deviationScalePane, 0d);
+        AnchorPane.setBottomAnchor(deviationScalePane, 0d);
+        AnchorPane.setLeftAnchor(deviationScalePane, 0d);
+        AnchorPane.setRightAnchor(deviationScalePane, 0d);
+
+        // Pane for our self-drawn horizontal grid lines. It sits behind the chart so the lines
+        // render beneath the (translucent) area fills, matching the chart's built-in appearance.
+        gridLinesPane = new Pane();
+        gridLinesPane.setMouseTransparent(true);
+        gridLinesPane.setPickOnBounds(false);
+        AnchorPane.setTopAnchor(gridLinesPane, 0d);
+        AnchorPane.setBottomAnchor(gridLinesPane, 0d);
+        AnchorPane.setLeftAnchor(gridLinesPane, 0d);
+        AnchorPane.setRightAnchor(gridLinesPane, 0d);
+
+        chartPane.getChildren().addAll(gridLinesPane, areaChart, deviationScalePane);
+
+        InvalidationListener overlayRedrawTrigger = observable -> scheduleChartOverlaysRedraw();
+        xAxis.lowerBoundProperty().addListener(overlayRedrawTrigger);
+        xAxis.upperBoundProperty().addListener(overlayRedrawTrigger);
+        xAxis.widthProperty().addListener(overlayRedrawTrigger);
+        yAxis.lowerBoundProperty().addListener(overlayRedrawTrigger);
+        yAxis.upperBoundProperty().addListener(overlayRedrawTrigger);
+        areaChart.widthProperty().addListener(overlayRedrawTrigger);
+        areaChart.heightProperty().addListener(overlayRedrawTrigger);
+    }
+
+    private synchronized void updateChartData() {
+
+        // update volume headers
+        Volume volumeSell = model.getTotalVolume(OfferDirection.SELL);
+        Volume volumeBuy = model.getTotalVolume(OfferDirection.BUY);
+        String formattedVolumeSell = volumeSell == null ? null : VolumeUtil.formatVolume(volumeSell);
+        String formattedVolumeBuy = volumeBuy == null ? null : VolumeUtil.formatVolume(volumeBuy);
+        if (model.getSellData().isEmpty()) formattedVolumeSell = "0.0";
+        if (model.getBuyData().isEmpty()) formattedVolumeBuy = "0.0";
+        volumeSellColumnLabel.set(Res.get("offerbook.volumeTotal", model.getCurrencyCode(), formattedVolumeSell == null ? "" : "(" + formattedVolumeSell + ")"));
+        volumeBuyColumnLabel.set(Res.get("offerbook.volumeTotal", model.getCurrencyCode(), formattedVolumeBuy == null ? "" : "(" + formattedVolumeBuy + ")"));
+
+        // update amount headers
+        amountSellColumnLabel.set(Res.get("offerbook.XMRTotal", "" + model.getTotalAmount(OfferDirection.SELL)));
+        amountBuyColumnLabel.set(Res.get("offerbook.XMRTotal", "" + model.getTotalAmount(OfferDirection.BUY)));
+
+        seriesSell.getData().clear();
+        seriesBuy.getData().clear();
+        areaChart.getData().clear();
+
+        seriesSell.getData().addAll(filterOutliersSell(model.getSellData()));
+        seriesBuy.getData().addAll(filterOutliersBuy(model.getBuyData()));
+
+        areaChart.getData().addAll(List.of(seriesBuy, seriesSell));
+
+        updateChartAxisRanging();
+
+        scheduleChartOverlaysRedraw();
+    }
+
+    private void updateChartAxisRanging() {
+        boolean hasData = !seriesBuy.getData().isEmpty() || !seriesSell.getData().isEmpty();
+        pinAxisWhenEmpty(xAxis, hasData);
+        pinAxisWhenEmpty(yAxis, hasData);
+    }
+
+    private void pinAxisWhenEmpty(NumberAxis axis, boolean hasData) {
+        if (hasData) {
+            axis.setAutoRanging(true);
+        } else if (axis.isAutoRanging()) {
+            axis.setAutoRanging(false);
+            axis.setLowerBound(0);
+            axis.setUpperBound(EMPTY_AXIS_UPPER_BOUND);
+            axis.setTickUnit(EMPTY_AXIS_UPPER_BOUND / EMPTY_AXIS_TICK_INTERVALS);
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Deviation scale (% from market price across the top of the chart)
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private static final int DEVIATION_TARGET_TICKS = 6;
+    private static final int DEVIATION_MAX_TICKS = 40;
+
+    private void scheduleChartOverlaysRedraw() {
+        if (chartOverlaysRedrawScheduled) return;
+        chartOverlaysRedrawScheduled = true;
+        UserThread.execute(() -> {
+            chartOverlaysRedrawScheduled = false;
+            redrawGridLines();
+            redrawDeviationScale();
+        });
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Horizontal grid lines (drawn here so the top/bottom lines don't flicker; see createChart)
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void redrawGridLines() {
+        if (gridLinesPane == null || areaChart == null || yAxis == null) return;
+        gridLinesPane.getChildren().clear();
+
+        Node plotBackground = areaChart.lookup(".chart-plot-background");
+        if (plotBackground == null) return;
+        Bounds plotBounds = gridLinesPane.sceneToLocal(plotBackground.localToScene(plotBackground.getBoundsInLocal()));
+        double plotLeft = plotBounds.getMinX();
+        double plotRight = plotBounds.getMaxX();
+        double plotTop = plotBounds.getMinY();
+        double plotBottom = plotBounds.getMaxY();
+        if (!(plotRight > plotLeft) || !(plotBottom > plotTop)) return;
+
+        // draw a horizontal grid line for every y-axis tick
+        for (Axis.TickMark<Number> tick : yAxis.getTickMarks()) {
+            double y = gridLineY(tick.getValue());
+            if (y < plotTop - 1 || y > plotBottom + 1) continue;
+            y = Math.floor(Math.min(plotBottom, Math.max(plotTop, y))) + 0.5;
+            Line line = new Line(plotLeft, y, plotRight, y);
+            line.getStyleClass().add("chart-horizontal-grid-line");
+            line.setManaged(false);
+            gridLinesPane.getChildren().add(line);
+        }
+    }
+
+    private double gridLineY(Number value) {
+        Point2D scenePoint = yAxis.localToScene(0, yAxis.getDisplayPosition(value));
+        return gridLinesPane.sceneToLocal(scenePoint).getY();
+    }
+
+    private void redrawDeviationScale() {
+        if (deviationScalePane == null || areaChart == null || xAxis == null) return;
+        deviationScalePane.getChildren().clear();
+
+        if (seriesBuy.getData().isEmpty() && seriesSell.getData().isEmpty()) return;
+        if (xAxis.getWidth() <= 0) return;
+
+        Optional<Double> marketPriceOpt = model.getMarketPriceAsDouble();
+        if (marketPriceOpt.isEmpty()) return;
+        double marketPrice = marketPriceOpt.get();
+        if (marketPrice <= 0) return;
+
+        double lower = xAxis.getLowerBound();
+        double upper = xAxis.getUpperBound();
+        if (!(upper > lower)) return;
+
+        Node plotBackground = areaChart.lookup(".chart-plot-background");
+        if (plotBackground == null) return;
+        Bounds plotBounds = deviationScalePane.sceneToLocal(plotBackground.localToScene(plotBackground.getBoundsInLocal()));
+        double plotTop = plotBounds.getMinY();
+        double plotBottom = plotBounds.getMaxY();
+        if (!(plotBottom > plotTop)) return;
+
+        double lowerDeviation = lower / marketPrice - 1;
+        double upperDeviation = upper / marketPrice - 1;
+        List<Double> deviations = niceTicks(lowerDeviation, upperDeviation, DEVIATION_TARGET_TICKS);
+        if (deviations.isEmpty()) return;
+        double step = deviations.size() > 1 ? Math.abs(deviations.get(1) - deviations.get(0)) : Math.abs(deviations.get(0));
+        int decimals = percentDecimals(step);
+
+        for (double deviation : deviations) {
+            double price = marketPrice * (1 + deviation);
+            if (price < lower || price > upper) continue;
+            double x = deviationScaleX(price);
+            boolean isZero = Math.abs(deviation) < step / 2;
+
+            Label label = new Label(formatDeviation(deviation, decimals));
+            label.getStyleClass().add("deviation-scale-label");
+            label.setManaged(false);
+            deviationScalePane.getChildren().add(label);
+            label.applyCss();
+            double labelWidth = label.prefWidth(-1);
+            double labelHeight = label.prefHeight(labelWidth);
+            label.resizeRelocate(x - labelWidth / 2, Math.max(1, plotTop - DEVIATION_TICK_HEIGHT - labelHeight - DEVIATION_LABEL_GAP), labelWidth, labelHeight);
+
+            Line line = isZero ? new Line(x, plotTop, x, plotBottom) : new Line(x, plotTop - DEVIATION_TICK_HEIGHT, x, plotTop);
+            line.getStyleClass().add(isZero ? "deviation-scale-zero-line" : "deviation-scale-tick");
+            line.setManaged(false);
+            deviationScalePane.getChildren().add(line);
+        }
+
+        // Minor ticks halfway between the labeled ticks (no label), for finer reading of the scale.
+        double minorStep = step / 2;
+        if (minorStep > 0) {
+            int minorTicks = 0;
+            for (double deviation = Math.ceil(lowerDeviation / minorStep) * minorStep;
+                    deviation <= upperDeviation + minorStep * 1e-6 && minorTicks < DEVIATION_MAX_TICKS;
+                    deviation += minorStep) {
+                double majorRatio = deviation / step;
+                if (Math.abs(majorRatio - Math.rint(majorRatio)) < 1e-6) continue; // coincides with a labeled tick
+                double price = marketPrice * (1 + deviation);
+                if (price < lower || price > upper) continue;
+                double x = deviationScaleX(price);
+
+                Line minorTick = new Line(x, plotTop - DEVIATION_MINOR_TICK_HEIGHT, x, plotTop);
+                minorTick.getStyleClass().add("deviation-scale-minor-tick");
+                minorTick.setManaged(false);
+                deviationScalePane.getChildren().add(minorTick);
+                minorTicks++;
+            }
+        }
+    }
+
+    private double deviationScaleX(double price) {
+        Point2D scenePoint = xAxis.localToScene(xAxis.getDisplayPosition(price), 0);
+        return deviationScalePane.sceneToLocal(scenePoint).getX();
+    }
+
+    private static List<Double> niceTicks(double min, double max, int targetCount) {
+        List<Double> result = new ArrayList<>();
+        if (!Double.isFinite(min) || !Double.isFinite(max) || max <= min) return result;
+        double step = niceStep((max - min) / Math.max(1, targetCount));
+        if (!(step > 0) || !Double.isFinite(step)) return result;
+        for (double v = Math.ceil(min / step) * step; v <= max + step * 1e-6 && result.size() < DEVIATION_MAX_TICKS; v += step) {
+            double rounded = Math.round(v / step) * step;
+            result.add(Math.abs(rounded) < step * 1e-9 ? 0 : rounded);
+        }
+        return result;
+    }
+
+    private static double niceStep(double raw) {
+        if (!(raw > 0) || !Double.isFinite(raw)) return 0;
+        double base = Math.pow(10, Math.floor(Math.log10(raw)));
+        double f = raw / base;
+        double niceF = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
+        return niceF * base;
+    }
+
+    private static int percentDecimals(double step) {
+        int decimals = 0;
+        for (double s = step * 100; decimals < 4 && Math.abs(s - Math.rint(s)) > 1e-9; s *= 10) decimals++;
+        return decimals;
+    }
+
+    private static String formatDeviation(double deviation, int decimals) {
+        double percent = deviation * 100;
+        if (Math.abs(percent) < Math.pow(10, -decimals) / 2) percent = 0;
+        DecimalFormat format = new DecimalFormat();
+        format.setDecimalFormatSymbols(DecimalFormatSymbols.getInstance(Locale.US));
+        format.setGroupingUsed(false);
+        format.setMinimumFractionDigits(decimals);
+        format.setMaximumFractionDigits(decimals);
+        return (percent > 0 ? "+" : "") + format.format(percent) + "%";
+    }
+
+    List<XYChart.Data<Number, Number>> filterOutliersBuy(List<XYChart.Data<Number, Number>> buy) {
+        List<Double> mnmx = minMaxFilterLeft(buy);
+        if (mnmx.get(0) == Double.MAX_VALUE ||
+                mnmx.get(1) == Double.MIN_VALUE) { // no filtering
+            return buy;
+        }
+        // apply filtering
+        return filterLeft(buy, mnmx.get(1));
+    }
+
+    List<XYChart.Data<Number, Number>> filterOutliersSell(List<XYChart.Data<Number, Number>> sell) {
+        List<Double> mnmx = minMaxFilterRight(sell);
+        if (mnmx.get(0) == Double.MAX_VALUE ||
+                mnmx.get(1) == Double.MIN_VALUE) { // no filtering
+            return sell;
+        }
+        // apply filtering
+        return filterRight(sell, mnmx.get(0));
+    }
+
+    private List<Double> minMaxFilterLeft(List<XYChart.Data<Number, Number>> data) {
+        synchronized (data) {
+            double maxValue = data.stream()
+                    .mapToDouble(o -> o.getXValue().doubleValue())
+                    .max()
+                    .orElse(Double.MIN_VALUE);
+            // Hide offers less than a div-factor of dataLimitFactor lower than the highest offer.
+            double minValue = data.stream()
+                    .mapToDouble(o -> o.getXValue().doubleValue())
+                    .filter(o -> o > maxValue / dataLimitFactor)
+                    .min()
+                    .orElse(Double.MAX_VALUE);
+            return List.of(minValue, maxValue);
+        }
+    }
+
+    private List<Double> minMaxFilterRight(List<XYChart.Data<Number, Number>> data) {
+        synchronized (data) {
+            double minValue = data.stream()
+                    .mapToDouble(o -> o.getXValue().doubleValue())
+                    .min()
+                    .orElse(Double.MAX_VALUE);
+
+            // Hide offers a dataLimitFactor factor higher than the lowest offer
+            double maxValue = data.stream()
+                    .mapToDouble(o -> o.getXValue().doubleValue())
+                    .filter(o -> o < minValue * dataLimitFactor)
+                    .max()
+                    .orElse(Double.MIN_VALUE);
+            return List.of(minValue, maxValue);
+        }
+    }
+
+    private List<XYChart.Data<Number, Number>> filterLeft(List<XYChart.Data<Number, Number>> data, double maxValue) {
+        synchronized (data) {
+            return data.stream()
+                    .filter(o -> o.getXValue().doubleValue() > maxValue / dataLimitFactor)
+                    .collect(Collectors.toList());
+        }
+    }
+
+    private List<XYChart.Data<Number, Number>> filterRight(List<XYChart.Data<Number, Number>> data, double minValue) {
+        synchronized (data) {
+            return data.stream()
+                    .filter(o -> o.getXValue().doubleValue() < minValue * dataLimitFactor)
+                    .collect(Collectors.toList());
+        }
+    }
+
+    private Tuple4<TableView<OfferListItem>, VBox, Button, Label> getOfferTable(OfferDirection direction) {
+        TableView<OfferListItem> tableView = new TableView<>();
+        GUIUtil.applyTableStyle(tableView);
+        tableView.setMinHeight(initialOfferTableViewHeight);
+        tableView.setPrefHeight(initialOfferTableViewHeight);
+        tableView.setMinWidth(480);
+        tableView.getStyleClass().addAll("offer-table", "non-interactive-table");
+
+        // price
+        TableColumn<OfferListItem, OfferListItem> priceColumn = new TableColumn<>();
+        priceColumn.textProperty().bind(priceColumnLabel);
+        priceColumn.setMinWidth(115);
+        priceColumn.setMaxWidth(115);
+        priceColumn.setSortable(false);
+        priceColumn.getStyleClass().add("number-column");
+        priceColumn.setCellValueFactory((offer) -> new ReadOnlyObjectWrapper<>(offer.getValue()));
+        priceColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<OfferListItem, OfferListItem> call(TableColumn<OfferListItem, OfferListItem> column) {
+                        return new TableCell<>() {
+                            private Offer offer;
+                            final ChangeListener<Number> listener = new ChangeListener<>() {
+                                @Override
+                                public void changed(ObservableValue<? extends Number> observable,
+                                                    Number oldValue,
+                                                    Number newValue) {
+                                    if (offer != null && offer.getPrice() != null) {
+                                        setText("");
+                                        setGraphic(new ColoredDecimalPlacesWithZerosText(model.getPrice(offer),
+                                                model.getZeroDecimalsForPrice(offer)));
+                                        model.priceFeedService.updateCounterProperty().removeListener(listener);
+                                    }
+                                }
+                            };
+
+                            @Override
+                            public void updateItem(final OfferListItem offerListItem, boolean empty) {
+                                super.updateItem(offerListItem, empty);
+                                if (offerListItem != null && !empty) {
+
+                                    final Offer offer = offerListItem.offer;
+                                    if (offer.getPrice() == null) {
+                                        this.offer = offer;
+                                        model.priceFeedService.updateCounterProperty().addListener(listener);
+                                        setText(Res.get("shared.na"));
+                                    } else {
+                                        setGraphic(new ColoredDecimalPlacesWithZerosText(model.getPrice(offer),
+                                                model.getZeroDecimalsForPrice(offer)));
+                                    }
+                                } else {
+                                    model.priceFeedService.updateCounterProperty().removeListener(listener);
+                                    this.offer = null;
+                                    setText("");
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+
+        boolean isSellTable = model.isSellOffer(direction);
+
+        // volume
+        TableColumn<OfferListItem, OfferListItem> volumeColumn = new TableColumn<>();
+        volumeColumn.setMinWidth(115);
+        volumeColumn.setSortable(false);
+        volumeColumn.textProperty().bind(isSellTable ? volumeSellColumnLabel : volumeBuyColumnLabel);
+        volumeColumn.getStyleClass().addAll("number-column");
+        volumeColumn.setCellValueFactory((offer) -> new ReadOnlyObjectWrapper<>(offer.getValue()));
+        volumeColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<OfferListItem, OfferListItem> call(TableColumn<OfferListItem, OfferListItem> column) {
+                        return new TableCell<>() {
+                            private Offer offer;
+                            final ChangeListener<Number> listener = new ChangeListener<>() {
+                                @Override
+                                public void changed(ObservableValue<? extends Number> observable,
+                                                    Number oldValue,
+                                                    Number newValue) {
+                                    if (offer != null && offer.getPrice() != null) {
+                                        renderCellContentRange();
+                                        model.priceFeedService.updateCounterProperty().removeListener(listener);
+                                    }
+                                }
+                            };
+
+                            @Override
+                            public void updateItem(final OfferListItem offerListItem, boolean empty) {
+                                super.updateItem(offerListItem, empty);
+                                if (offerListItem != null && !empty) {
+                                    this.offer = offerListItem.offer;
+                                    if (offer.getPrice() == null) {
+                                        this.offer = offerListItem.offer;
+                                        model.priceFeedService.updateCounterProperty().addListener(listener);
+                                        setText(Res.get("shared.na"));
+                                    } else {
+                                        renderCellContentRange();
+                                    }
+                                } else {
+                                    model.priceFeedService.updateCounterProperty().removeListener(listener);
+                                    this.offer = null;
+                                    setText("");
+                                    setGraphic(null);
+                                }
+                            }
+
+                            /**
+                             * Renders cell content, if it has a single value or a range.
+                             * Should not be called for empty cells
+                             */
+                            private void renderCellContentRange() {
+                                String volumeRange = VolumeUtil.formatVolume(offer, true, 2);
+
+                                setText("");
+                                setGraphic(new ColoredDecimalPlacesWithZerosText(volumeRange,
+                                        model.getMaxNumberOfPriceZeroDecimalsToColorize(offer)));
+                            }
+
+                        };
+                    }
+                });
+
+        // amount
+        TableColumn<OfferListItem, OfferListItem> amountColumn = new TableColumn<>();
+        amountColumn.textProperty().bind(isSellTable ? amountSellColumnLabel : amountBuyColumnLabel);
+        amountColumn.setMinWidth(115);
+        amountColumn.setSortable(false);
+        amountColumn.getStyleClass().add("number-column");
+        amountColumn.setCellValueFactory((offer) -> new ReadOnlyObjectWrapper<>(offer.getValue()));
+        amountColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<OfferListItem, OfferListItem> call(TableColumn<OfferListItem, OfferListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final OfferListItem offerListItem, boolean empty) {
+                                super.updateItem(offerListItem, empty);
+                                if (offerListItem != null && !empty) {
+                                    String amountRange = DisplayUtils.formatAmount(offerListItem.offer, formatter);
+                                    setGraphic(new ColoredDecimalPlacesWithZerosText(amountRange, GUIUtil.AMOUNT_DECIMALS_WITH_ZEROS));
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+
+        // trader avatar
+        TableColumn<OfferListItem, OfferListItem> avatarColumn = new AutoTooltipTableColumn<>(isSellTable ?
+                Res.get("shared.sellerUpperCase") : Res.get("shared.buyerUpperCase")) {
+            {
+                setMinWidth(80);
+                setMaxWidth(80);
+                setSortable(true);
+            }
+        };
+
+        avatarColumn.getStyleClass().addAll("avatar-column");
+        avatarColumn.setCellValueFactory((offer) -> new ReadOnlyObjectWrapper<>(offer.getValue()));
+        avatarColumn.setCellFactory(
+                new Callback<>() {
+
+                    @Override
+                    public TableCell<OfferListItem, OfferListItem> call(TableColumn<OfferListItem, OfferListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final OfferListItem newItem, boolean empty) {
+                                super.updateItem(newItem, empty);
+                                if (newItem != null && !empty) {
+                                    final Offer offer = newItem.offer;
+                                    boolean myOffer = model.isMyOffer(offer);
+                                    if (!myOffer) {
+                                        final NodeAddress makersNodeAddress = offer.getOwnerNodeAddress();
+                                        String role = Res.get("peerInfoIcon.tooltip.maker");
+                                        PeerInfoIconSmall peerInfoIcon = new PeerInfoIconSmall(makersNodeAddress,
+                                                role,
+                                                offer,
+                                                model.preferences,
+                                                model.accountAgeWitnessService,
+                                                useDevPrivilegeKeys);
+//                                    setAlignment(Pos.CENTER);
+                                        setGraphic(peerInfoIcon);
+                                    } else {
+                                        setGraphic(new Label(Res.get("shared.me")));
+                                    }
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+
+        tableView.getColumns().add(volumeColumn);
+        tableView.getColumns().add(amountColumn);
+        tableView.getColumns().add(priceColumn);
+        tableView.getColumns().add(avatarColumn);
+
+        tableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        Label placeholder = new AutoTooltipLabel(Res.get("table.placeholder.noItems", Res.get("shared.multipleOffers")));
+        placeholder.setWrapText(true);
+        tableView.setPlaceholder(placeholder);
+
+        HBox titleButtonBox = new HBox();
+        titleButtonBox.getStyleClass().add("offer-table-top");
+        titleButtonBox.setAlignment(Pos.CENTER);
+
+        Label titleLabel = new AutoTooltipLabel();
+        titleLabel.getStyleClass().add("table-title");
+
+        AutoTooltipButton button = new AutoTooltipButton();
+        button.setContentDisplay(ContentDisplay.RIGHT);
+        button.setGraphicTextGap(10);
+        button.setMinHeight(32);
+
+        Region spacer = new Region();
+
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        titleButtonBox.getChildren().addAll(titleLabel, spacer, button);
+
+        VBox vBox = new VBox();
+        vBox.getStyleClass().add("offer-book-card");
+        VBox.setVgrow(tableView, Priority.ALWAYS);
+        vBox.setPadding(new Insets(1)); // inset children by the border width so the card border stays visible
+        vBox.setSpacing(0);
+        vBox.setFillWidth(true);
+        //vBox.setMinHeight(190);
+        vBox.getChildren().addAll(titleButtonBox, tableView);
+
+        return new Tuple4<>(tableView, vBox, button, titleLabel);
+    }
+
+}

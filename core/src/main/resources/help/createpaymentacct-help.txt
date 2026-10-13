@@ -1,0 +1,24 @@
+createpaymentacct
+
+NAME
+----
+createpaymentacct - create a payment account
+
+SYNOPSIS
+--------
+createpaymentacct
+		--payment-account-form=<value>
+
+DESCRIPTION
+-----------
+Create a payment account from a completed json form from the getpaymentacctform method.
+
+OPTIONS
+-------
+--payment-account-form
+		The path to the completed json payment account form.
+
+EXAMPLES
+--------
+Create a payment account:
+$ ./haveno-cli --password=xyz --port=9998 createpaymentacct --payment-account-form=/tmp/sepa_1234567890.json

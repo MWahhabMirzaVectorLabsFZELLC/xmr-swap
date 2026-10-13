@@ -1,0 +1,18 @@
+stop
+
+NAME
+----
+stop - shut down the server
+
+SYNOPSIS
+--------
+stop
+
+DESCRIPTION
+-----------
+Send a shutdown request to the Haveno server.
+
+EXAMPLES
+--------
+Shut down the server:
+$ ./haveno-cli --password=xyz --port=9998 stop

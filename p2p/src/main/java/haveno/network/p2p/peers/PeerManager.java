@@ -1,0 +1,1014 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.network.p2p.peers;
+
+import com.google.common.annotations.VisibleForTesting;
+import static com.google.common.base.Preconditions.checkArgument;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+import com.google.inject.Inject;
+import com.google.inject.name.Named;
+import haveno.common.ClockWatcher;
+import haveno.common.ThreadUtils;
+import haveno.common.Timer;
+import haveno.common.app.Capabilities;
+import haveno.common.app.Capability;
+import haveno.common.config.Config;
+import haveno.common.persistence.PersistenceManager;
+import haveno.common.proto.persistable.PersistedDataHost;
+import haveno.network.p2p.NodeAddress;
+import haveno.network.p2p.network.CloseConnectionReason;
+import haveno.network.p2p.network.Connection;
+import haveno.network.p2p.network.ConnectionListener;
+import haveno.network.p2p.network.InboundConnection;
+import haveno.network.p2p.network.NetworkNode;
+import haveno.network.p2p.network.OutboundConnection;
+import haveno.network.p2p.network.PeerType;
+import haveno.network.p2p.network.RuleViolation;
+import haveno.network.p2p.peers.peerexchange.Peer;
+import haveno.network.p2p.peers.peerexchange.PeerList;
+import haveno.network.p2p.seed.SeedNodeRepository;
+import haveno.network.utils.EventThrottler;
+import haveno.network.utils.EventThrottler.ThrottleResult;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import javax.annotation.Nullable;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public final class PeerManager implements ConnectionListener, PersistedDataHost {
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Static
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private static final long CHECK_MAX_CONN_DELAY_SEC = 10;
+    private static final long RECOVERY_GRACE_PERIOD_SEC = 10; // connectivity must survive this long to declare recovery from all connections lost
+    // Use a long delay as the bootstrapping peer might need a while until it knows its onion address
+    private static final long REMOVE_ANONYMOUS_PEER_SEC = 240;
+
+    private static final int MAX_REPORTED_PEERS = 1000;
+    private static final int MAX_PERSISTED_PEERS = 500;
+    // max age for reported peers is 14 days
+    private static final long MAX_AGE = TimeUnit.DAYS.toMillis(14);
+    // Age of what we consider connected peers still as live peers
+    private static final long MAX_AGE_LIVE_PEERS = TimeUnit.MINUTES.toMillis(30);
+    private static final boolean PRINT_REPORTED_PEERS_DETAILS = true;
+    private Timer printStatisticsTimer;
+    private boolean shutDownRequested;
+    private int numOnConnections;
+    private EventThrottler checkMaxConnectionsThrottler = new EventThrottler(Connection.LOG_THROTTLE_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    private EventThrottler getLivePeersThrottler = new EventThrottler(Connection.LOG_THROTTLE_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    private EventThrottler removeAnonymousThrottler = new EventThrottler(Connection.LOG_THROTTLE_INTERVAL_MS, TimeUnit.MILLISECONDS);
+    private static final String THREAD_ID = PeerManager.class.getSimpleName();
+    private static final boolean DEFER_HOUSEKEEPING = true;
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Listener
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public interface Listener {
+        void onAllConnectionsLost();
+
+        void onNewConnectionAfterAllConnectionsLost();
+
+        void onAwakeFromStandby();
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Instance fields
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private final NetworkNode networkNode;
+    private final ClockWatcher clockWatcher;
+    private final Set<NodeAddress> seedNodeAddresses;
+    private final PersistenceManager<PeerList> persistenceManager;
+    private final ClockWatcher.Listener clockWatcherListener;
+    private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+
+    // Persistable peerList
+    private final PeerList peerList = new PeerList();
+    // Peers we got reported from other peers
+    @Getter
+    private final Set<Peer> reportedPeers = new HashSet<>();
+    // Most recent peers with activity date of last 30 min.
+    private final Set<Peer> latestLivePeers = new HashSet<>();
+    // Peers detected on a different P2P network; never dialed or re-added, bounded with eldest-first eviction
+    private static final int MAX_WRONG_NETWORK_PEERS = 2000;
+    private final Set<NodeAddress> wrongNetworkPeers = Collections.synchronizedSet(new LinkedHashSet<>());
+    // Peers evicted after repeated silent failures may be retried after the cooldown
+    private final Cache<NodeAddress, Boolean> failedPeers = CacheBuilder.newBuilder()
+            .maximumSize(2000)
+            .expireAfterWrite(1, TimeUnit.HOURS)
+            .build();
+
+    private Timer checkMaxConnectionsTimer;
+    private Timer recoveryGraceTimer;
+    private int recoveryGraceEpoch; // invalidates in-flight recovery grace timers when incremented
+    private boolean stopped;
+    private boolean lostAllConnections;
+    private boolean lostAllConnectionsReported; // whether listeners were notified for the current loss episode
+    private int maxConnections;
+
+    @Getter
+    private int minConnections;
+    private int outBoundPeerTrigger;
+    private int initialDataExchangeTrigger;
+    private int maxConnectionsAbsolute;
+    @Getter
+    private int peakNumConnections;
+    @Getter
+    private int numAllConnectionsLostEvents;
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Inject
+    public PeerManager(NetworkNode networkNode,
+                       SeedNodeRepository seedNodeRepository,
+                       ClockWatcher clockWatcher,
+                       PersistenceManager<PeerList> persistenceManager,
+                       @Named(Config.MAX_CONNECTIONS) int maxConnections) {
+        this.networkNode = networkNode;
+        this.seedNodeAddresses = new HashSet<>(seedNodeRepository.getSeedNodeAddresses());
+        this.clockWatcher = clockWatcher;
+        this.persistenceManager = persistenceManager;
+
+        this.persistenceManager.initialize(peerList, PersistenceManager.Source.PRIVATE_LOW_PRIO);
+        this.networkNode.addConnectionListener(this);
+
+        setConnectionLimits(maxConnections);
+
+        // we check if app was idle for more then 5 sec.
+        clockWatcherListener = new ClockWatcher.Listener() {
+            @Override
+            public void onSecondTick() {
+            }
+
+            @Override
+            public void onMinuteTick() {
+            }
+
+            @Override
+            public void onAwakeFromStandby(long missedMs) {
+                // We got probably stopped set to true when we got a longer interruption (e.g. lost all connections),
+                // now we get awake again, so set stopped to false.
+                stopped = false;
+                synchronized (listeners) {
+                    listeners.forEach(Listener::onAwakeFromStandby);
+                }
+            }
+        };
+        clockWatcher.addListener(clockWatcherListener);
+
+        printStatisticsTimer = ThreadUtils.runPeriodically(this::printStatistics, TimeUnit.MINUTES.toSeconds(60));
+    }
+
+    public void shutDown() {
+        shutDownRequested = true;
+
+        networkNode.removeConnectionListener(this);
+        clockWatcher.removeListener(clockWatcherListener);
+
+        stopCheckMaxConnectionsTimer();
+        stopRecoveryGraceTimer();
+
+        if (printStatisticsTimer != null) {
+            printStatisticsTimer.stop();
+            printStatisticsTimer = null;
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // PersistedDataHost implementation
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public void readPersisted(Runnable completeHandler) {
+        persistenceManager.readPersisted(persisted -> {
+                    peerList.setAll(persisted.getMap().values());
+                    completeHandler.run();
+                },
+                completeHandler);
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // ConnectionListener implementation
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public void onConnection(Connection connection) {
+        connection.getConnectionState().setSeedNode(isSeedNode(connection));
+
+        doHouseKeeping();
+
+        numOnConnections++;
+
+        if (lostAllConnections && recoveryGraceTimer == null) {
+            int epoch = recoveryGraceEpoch;
+            recoveryGraceTimer = ThreadUtils.runAfter(() -> ThreadUtils.execute(() -> { // serialize with connection events
+                if (shutDownRequested || epoch != recoveryGraceEpoch) return; // timer was stopped after expiry
+                recoveryGraceTimer = null;
+                if (networkNode.getAllConnections().stream().allMatch(Connection::isStopped)) return; // require a live connection to declare recovery
+                lostAllConnections = false;
+                lostAllConnectionsReported = false;
+                stopped = false;
+                log.info("\n------------------------------------------------------------\n" +
+                        "Connectivity recovered after all connections lost.\n" +
+                        "------------------------------------------------------------");
+                synchronized (listeners) {
+                    listeners.forEach(Listener::onNewConnectionAfterAllConnectionsLost);
+                }
+                doHouseKeeping();
+            }, Connection.THREAD_ID), RECOVERY_GRACE_PERIOD_SEC);
+        }
+    }
+
+    @Override
+    public void onDisconnect(CloseConnectionReason closeConnectionReason, Connection connection) {
+        log.debug("onDisconnect called: nodeAddress={}, closeConnectionReason={}",
+                connection.getPeersNodeAddressOptional(), closeConnectionReason);
+        handleConnectionFault(connection);
+
+        // score each outbound connection once; only a silent unintended close accrues a failure
+        // partial responses are not silent, and inbound addresses are unverified
+        if (connection instanceof OutboundConnection && connection.tryAccountPeerFault()) {
+            boolean receivedData = connection.getStatistic().getReceivedBytes() > 0;
+            if (receivedData && connection.getRuleViolation() == null) {
+                connection.getPeersNodeAddressOptional().ifPresent(failedPeers::invalidate);
+            }
+            connection.getPeersNodeAddressOptional().flatMap(this::findPersistedPeer).ifPresent(peer -> {
+                if (receivedData) {
+                    peer.onConnection();
+                } else if (!closeConnectionReason.isIntended && connection.getLastReadTimestamp() == 0) {
+                    peer.onDisconnect();
+                    if (peer.tooManyFailedConnectionAttempts()) {
+                        if (!isSeedNode(peer.getNodeAddress())) {
+                            failedPeers.put(peer.getNodeAddress(), true);
+                            log.info("Pausing peer discovery to {} for one hour after repeated silent connection failures", peer.getNodeAddress());
+                        }
+                        removePersistedPeer(peer.getNodeAddress());
+                    }
+                }
+            });
+        }
+
+        boolean previousLostAllConnections = lostAllConnections;
+        if (networkNode.getAllConnections().isEmpty()) {
+            boolean newLossEvent = !previousLostAllConnections || recoveryGraceTimer != null; // a failed recovery attempt counts as a new loss event
+            lostAllConnections = true; // remains set until recovery is declared after the grace period
+            stopRecoveryGraceTimer(); // a fresh grace period starts with the next connection
+
+            // At start-up we ignore if we would lose a connection and would fall back to no connections
+            if (numOnConnections > 2) {
+                stopped = true;
+                if (!shutDownRequested) {
+                    if (newLossEvent) numAllConnectionsLostEvents++;
+
+                    // only notify listeners once per loss episode, not on repeats while still lost
+                    if (!lostAllConnectionsReported) {
+                        lostAllConnectionsReported = true;
+                        log.warn("\n------------------------------------------------------------\n" +
+                                "All connections lost\n" +
+                                "------------------------------------------------------------");
+
+                        synchronized (listeners) {
+                            listeners.forEach(Listener::onAllConnectionsLost);
+                        }
+                    }
+                }
+            }
+        }
+        maybeRemoveBannedPeer(closeConnectionReason, connection);
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Connection
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public boolean hasSufficientConnections() {
+        return networkNode.getConfirmedConnections().size() >= minConnections;
+    }
+
+    // Checks if that connection has the peers node address
+    public boolean isConfirmed(NodeAddress nodeAddress) {
+        return networkNode.getNodeAddressesOfConfirmedConnections().contains(nodeAddress);
+    }
+
+    public void handleConnectionFault(Connection connection) {
+        connection.getPeersNodeAddressOptional().ifPresent(nodeAddress -> handleConnectionFault(nodeAddress, connection));
+    }
+
+    public void handleConnectionFault(NodeAddress nodeAddress) {
+        handleConnectionFault(nodeAddress, null);
+    }
+
+    public void handleConnectionFault(NodeAddress nodeAddress, @Nullable Connection connection) {
+        // inbound faults are no evidence against the peer, whose address is an unverified claim
+        if (connection instanceof InboundConnection) return;
+        // the peer failure counter is adjusted only at onDisconnect by outbound connection outcomes
+        boolean isOffline = connection == null && networkNode.getAllConnections().isEmpty();
+        if (!isOffline) removeReportedPeer(nodeAddress);
+        boolean ruleViolation = connection != null && connection.getRuleViolation() != null;
+        boolean doRemovePersistedPeer = ruleViolation ||
+                findPersistedPeer(nodeAddress).map(Peer::tooManyFailedConnectionAttempts).orElse(false);
+
+        // never dial or re-add peers detected on a different P2P network
+        if (connection != null && connection.getRuleViolation() == RuleViolation.WRONG_NETWORK_ID) blocklistWrongNetworkPeer(nodeAddress);
+
+        if (doRemovePersistedPeer)
+            removePersistedPeer(nodeAddress);
+        else
+            removeTooOldPersistedPeers();
+
+        // remove reported peers and live peers on rule violation
+        // TODO: make consistent with removePersistedPeer ?
+        if (ruleViolation) {
+            Optional<NodeAddress> optionalNodeAddress = connection.getPeersNodeAddressOptional();
+            if (optionalNodeAddress.isPresent()) {
+                synchronized (latestLivePeers) {
+                    latestLivePeers.removeIf(peer -> peer.getNodeAddress().equals(optionalNodeAddress.get()));
+                }
+                synchronized (reportedPeers) {
+                    reportedPeers.removeIf(peer -> peer.getNodeAddress().equals(optionalNodeAddress.get()));
+                }
+            }
+        }
+    }
+
+    public boolean isWrongNetworkPeer(NodeAddress nodeAddress) {
+        return wrongNetworkPeers.contains(nodeAddress);
+    }
+
+    public boolean isPeerUnavailable(NodeAddress nodeAddress) {
+        return isWrongNetworkPeer(nodeAddress) || failedPeers.getIfPresent(nodeAddress) != null;
+    }
+
+    private void blocklistWrongNetworkPeer(NodeAddress nodeAddress) {
+        synchronized (wrongNetworkPeers) {
+            wrongNetworkPeers.remove(nodeAddress); // re-insert so eviction order tracks the latest detection
+            wrongNetworkPeers.add(nodeAddress);
+            if (wrongNetworkPeers.size() > MAX_WRONG_NETWORK_PEERS) {
+                Iterator<NodeAddress> it = wrongNetworkPeers.iterator();
+                it.next();
+                it.remove();
+            }
+        }
+    }
+
+    public boolean isSeedNode(Connection connection) {
+        return connection.getPeersNodeAddressOptional().isPresent() &&
+                isSeedNode(connection.getPeersNodeAddressOptional().get());
+    }
+
+    public boolean isSelf(NodeAddress nodeAddress) {
+        return nodeAddress.equals(networkNode.getNodeAddress());
+    }
+
+    private boolean isSeedNode(Peer peer) {
+        synchronized (seedNodeAddresses) {
+            return seedNodeAddresses.contains(peer.getNodeAddress());
+        }
+    }
+
+    public boolean isSeedNode(NodeAddress nodeAddress) {
+        synchronized (seedNodeAddresses) {
+            return seedNodeAddresses.contains(nodeAddress);
+        }
+    }
+
+    public boolean isPeerBanned(CloseConnectionReason closeConnectionReason, Connection connection) {
+        return closeConnectionReason == CloseConnectionReason.PEER_BANNED &&
+                connection.getPeersNodeAddressOptional().isPresent();
+    }
+
+    private void maybeRemoveBannedPeer(CloseConnectionReason closeConnectionReason, Connection connection) {
+        if (connection.getPeersNodeAddressOptional().isPresent() && isPeerBanned(closeConnectionReason, connection)) {
+            NodeAddress nodeAddress = connection.getPeersNodeAddressOptional().get();
+            removeSeedNodeAddress(nodeAddress);
+            removePersistedPeer(nodeAddress);
+            removeReportedPeer(nodeAddress);
+        }
+    }
+
+    public void maybeResetNumAllConnectionsLostEvents() {
+        if (!networkNode.getAllConnections().isEmpty()) {
+            numAllConnectionsLostEvents = 0;
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Peer
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @SuppressWarnings("unused")
+    public Optional<Peer> findPeer(NodeAddress peersNodeAddress) {
+        return getAllPeers().stream()
+                .filter(peer -> peer.getNodeAddress().equals(peersNodeAddress))
+                .findAny();
+    }
+
+    public Set<Peer> getAllPeers() {
+        Set<Peer> allPeers = getLivePeers(null);
+        allPeers.addAll(getPersistedPeers());
+        synchronized (reportedPeers) {
+            allPeers.addAll(reportedPeers);
+        }
+        return allPeers;
+    }
+
+    public Collection<Peer> getPersistedPeers() {
+        return peerList.getMap().values();
+    }
+
+    public void addToReportedPeers(Set<Peer> reportedPeersToAdd,
+                                   Connection connection,
+                                   Capabilities capabilities) {
+        applyCapabilities(connection, capabilities);
+
+        // an oversized list is a rule violation which shuts down the connection on the 2nd offense;
+        // check the raw count before filtering, so filtered-out entries cannot mask an oversized list
+        if (reportedPeersToAdd.size() > (MAX_REPORTED_PEERS + maxConnectionsAbsolute + 10)) {
+            connection.reportInvalidRequest(RuleViolation.TOO_MANY_REPORTED_PEERS_SENT, "Too many reported peers sent");
+            return;
+        }
+
+        Set<Peer> peers = reportedPeersToAdd.stream()
+                .filter(peer -> !isSelf(peer.getNodeAddress()))
+                .filter(peer -> !isPeerUnavailable(peer.getNodeAddress()))
+                .collect(Collectors.toSet());
+
+        printNewReportedPeers(peers);
+
+        synchronized (reportedPeers) {
+            reportedPeers.addAll(peers);
+            purgeReportedPeersIfExceeds();
+
+            peerList.addAll(peers);
+            purgePersistedPeersIfExceeds();
+            requestPersistence();
+
+            printReportedPeers();
+        }
+    }
+
+    // Delivers the live peers from the last 30 min (MAX_AGE_LIVE_PEERS)
+    // We include older peers to avoid risks for network partitioning
+    public Set<Peer> getLivePeers(@Nullable NodeAddress excludedNodeAddress) {
+        synchronized (latestLivePeers) {
+            int oldNumLatestLivePeers = latestLivePeers.size();
+
+            Set<Peer> peers = new HashSet<>(latestLivePeers);
+            Set<Peer> currentLivePeers = getConnectedReportedPeers().stream()
+                    .filter(e -> !isSeedNode(e))
+                    .filter(e -> !e.getNodeAddress().equals(excludedNodeAddress))
+                    .collect(Collectors.toSet());
+            peers.addAll(currentLivePeers);
+
+            long maxAge = new Date().getTime() - MAX_AGE_LIVE_PEERS;
+            latestLivePeers.clear();
+            Set<Peer> recentPeers = peers.stream()
+                    .filter(peer -> peer.getDateAsLong() > maxAge)
+                    .filter(peer -> !isPeerUnavailable(peer.getNodeAddress()))
+                    .collect(Collectors.toSet());
+            latestLivePeers.addAll(recentPeers);
+
+            if (oldNumLatestLivePeers != latestLivePeers.size()) {
+
+                // throttle logging of latest live peers
+                ThrottleResult throttleResult = getLivePeersThrottler.onEvent();
+                if (!throttleResult.throttled) {
+                    log.info("Num of latestLivePeers={}", latestLivePeers.size());
+                    long count = throttleResult.throttledCount;
+                    if (count > Connection.POSSIBLE_DOS_THRESHOLD) {
+                        log.warn("We have throttled logs for {} getLivePeers calls. {}", count, Connection.POSSIBLE_DOS_MESSAGE);
+                    } else {
+                        if (count > 0) log.info("We have throttled logs for {} getLivePeers calls", count);
+                    }
+                }
+            }
+            return recentPeers; // return a copy
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Capabilities
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public boolean peerHasCapability(NodeAddress peersNodeAddress, Capability capability) {
+        return findPeersCapabilities(peersNodeAddress)
+                .map(capabilities -> capabilities.contains(capability))
+                .orElse(false);
+    }
+
+    public Optional<Capabilities> findPeersCapabilities(NodeAddress nodeAddress) {
+        // We look up first our connections as that is our own data. If not found there we look up the peers which
+        // include reported peers.
+        Optional<Capabilities> optionalCapabilities = networkNode.findPeersCapabilities(nodeAddress);
+        if (optionalCapabilities.isPresent() && !optionalCapabilities.get().isEmpty()) {
+            return optionalCapabilities;
+        }
+
+        // Reported peers are not trusted data. We could get capabilities which miss the
+        // peers real capability or we could get maliciously altered capabilities telling us the peer supports a
+        // capability which is in fact not supported. This could lead to connection loss as we might send data not
+        // recognized by the peer. As we register a listener on connection if we don't have set the capability from our
+        // own sources we would get it fixed as soon we have a connection with that peer, rendering such an attack
+        // inefficient.
+        // Also this risk is only for not updated peers, so in case that would be abused for an
+        // attack all users have a strong incentive to update ;-).
+        return getAllPeers().stream()
+                .filter(peer -> peer.getNodeAddress().equals(nodeAddress))
+                .findAny()
+                .map(Peer::getCapabilities);
+    }
+
+    private void applyCapabilities(Connection connection, Capabilities newCapabilities) {
+        if (newCapabilities == null || newCapabilities.isEmpty()) {
+            return;
+        }
+
+        connection.getPeersNodeAddressOptional().ifPresent(nodeAddress -> {
+            getAllPeers().stream()
+                    .filter(peer -> peer.getNodeAddress().equals(nodeAddress))
+                    .filter(peer -> peer.getCapabilities().hasLess(newCapabilities))
+                    .forEach(peer -> peer.setCapabilities(newCapabilities));
+        });
+        requestPersistence();
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Housekeeping
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void doHouseKeeping() {
+        if (DEFER_HOUSEKEEPING) {
+            if (checkMaxConnectionsTimer == null) {
+                printConnectedPeers();
+                checkMaxConnectionsTimer = ThreadUtils.runAfter(() -> ThreadUtils.execute(() -> {
+                    stopCheckMaxConnectionsTimer();
+                    doHouseKeepingAux();
+                }, THREAD_ID), CHECK_MAX_CONN_DELAY_SEC);
+            }
+        } else {
+            ThreadUtils.runAfter(() -> doHouseKeepingAux(), 3); // allow some time to establish the connection
+        }
+    }
+
+    private void doHouseKeepingAux() {
+        if (!stopped) {
+            Set<Connection> allConnections = new HashSet<>(networkNode.getAllConnections());
+            int size = allConnections.size();
+            peakNumConnections = Math.max(peakNumConnections, size);
+
+            removeAnonymousPeers();
+            removeTooOldReportedPeers();
+            removeTooOldPersistedPeers();
+            checkMaxConnections();
+        } else {
+            log.debug("We have stopped already. We ignore that checkMaxConnectionsTimer.run call.");
+        }
+    }
+
+    @VisibleForTesting
+    boolean checkMaxConnections() {
+        Set<Connection> allConnections = new HashSet<>(networkNode.getAllConnections());
+        int size = allConnections.size();
+        ThrottleResult throttleResult = checkMaxConnectionsThrottler.onEvent();
+        boolean throttleLogs = throttleResult.throttled;
+
+        if (!throttleLogs && throttleResult.throttledCount > 0) {
+            long count = throttleResult.throttledCount;
+            if (count > maxConnections + Connection.POSSIBLE_DOS_THRESHOLD) {
+                log.warn("We have throttled logs for {} checkMaxConnections calls. {}", count, Connection.POSSIBLE_DOS_MESSAGE);
+            } else {
+                log.info("We have throttled logs for {} checkMaxConnections calls", count);
+            }
+        }
+
+        if (!throttleLogs) log.info("We have {} connections open. Our limit is {}", size, maxConnections);
+
+        if (size <= maxConnections) {
+            log.debug("We have not exceeded the maxConnections limit of {} " +
+                    "so don't need to close any connections.", size);
+            return false;
+        }
+
+        if (!throttleLogs) {
+            log.info("We have too many connections open. Lets try first to remove the inbound connections of type PEER.");
+        }
+        List<Connection> candidates = allConnections.stream()
+                .filter(e -> e instanceof InboundConnection)
+                .filter(e -> e.getConnectionState().getPeerType() == PeerType.PEER)
+                .filter(e -> !e.isStopped())
+                .sorted(Comparator.comparingLong(o -> o.getStatistic().getLastActivityTimestamp()))
+                .collect(Collectors.toList());
+
+        if (candidates.isEmpty()) {
+            log.debug("No candidates found. We check if we exceed our " +
+                    "outBoundPeerTrigger of {}", outBoundPeerTrigger);
+            if (size <= outBoundPeerTrigger) {
+                log.debug("We have not exceeded outBoundPeerTrigger of {} " +
+                        "so don't need to close any connections", outBoundPeerTrigger);
+                return false;
+            }
+
+            log.debug("We have exceeded outBoundPeerTrigger of {}. " +
+                    "Lets try to remove outbound connection of type PEER.", outBoundPeerTrigger);
+            candidates = allConnections.stream()
+                    .filter(e -> e.getConnectionState().getPeerType() == PeerType.PEER)
+                    .filter(e -> !e.isStopped())
+                    .sorted(Comparator.comparingLong(o -> o.getStatistic().getLastActivityTimestamp()))
+                    .collect(Collectors.toList());
+
+            if (candidates.isEmpty()) {
+                log.debug("No candidates found. We check if we exceed our " +
+                        "initialDataExchangeTrigger of {}", initialDataExchangeTrigger);
+                if (size <= initialDataExchangeTrigger) {
+                    log.debug("We have not exceeded initialDataExchangeTrigger of {} " +
+                            "so don't need to close any connections", initialDataExchangeTrigger);
+                    return false;
+                }
+
+                log.debug("We have exceeded initialDataExchangeTrigger of {} " +
+                        "Lets try to remove the oldest INITIAL_DATA_EXCHANGE connection.", initialDataExchangeTrigger);
+                candidates = allConnections.stream()
+                        .filter(e -> e.getConnectionState().getPeerType() == PeerType.INITIAL_DATA_EXCHANGE)
+                        .sorted(Comparator.comparingLong(o -> o.getConnectionState().getLastInitialDataMsgTimeStamp()))
+                        .collect(Collectors.toList());
+
+                if (candidates.isEmpty()) {
+                    log.debug("No candidates found. We check if we exceed our " +
+                            "maxConnectionsAbsolute limit of {}", maxConnectionsAbsolute);
+                    if (size <= maxConnectionsAbsolute) {
+                        log.debug("We have not exceeded maxConnectionsAbsolute limit of {} " +
+                                "so don't need to close any connections", maxConnectionsAbsolute);
+                        return false;
+                    }
+
+                    log.info("We reached abs. max. connections. Lets try to remove ANY connection.");
+                    candidates = allConnections.stream()
+                            .sorted(Comparator.comparingLong(o -> o.getStatistic().getLastActivityTimestamp()))
+                            .collect(Collectors.toList());
+                }
+            }
+        }
+
+        if (!candidates.isEmpty()) {
+            Connection connection = candidates.remove(0);
+            if (!throttleLogs) {
+                log.info("checkMaxConnections: Num candidates (inbound/peer) for shut down={}. We close oldest connection to peer {}", candidates.size(), connection.getPeersNodeAddressOptional());
+            }
+            if (!connection.isStopped()) {
+                connection.shutDown(CloseConnectionReason.TOO_MANY_CONNECTIONS_OPEN,
+                        () -> ThreadUtils.execute(() -> checkMaxConnections(), THREAD_ID));
+                return true;
+            }
+        }
+
+        if (!throttleLogs) {
+            log.info("No candidates found to remove. size={}", size);
+        }
+
+        return false;
+    }
+
+    private void removeAnonymousPeers() {
+
+        // collect connections to check
+        List<Connection> connectionsToCheck =
+                networkNode.getAllConnections().stream()
+                .filter(connection -> !connection.hasPeersNodeAddress())
+                .filter(connection -> connection.getConnectionState().getPeerType() == PeerType.PEER)
+                .collect(Collectors.toList());
+
+        // We give 240 seconds delay and check again if still no address is set
+        // Keep the delay long as we don't want to disconnect a peer in case we are a seed node just
+        // because he needs longer for the HS publishing
+        ThreadUtils.runAfter(() -> ThreadUtils.execute(() -> { // todo we keep a potentially dead connection in memory for too long...
+            connectionsToCheck.forEach(connection -> {
+                if (!connection.isStopped() && !connection.hasPeersNodeAddress()) {
+
+                    // throttle logging
+                    ThrottleResult throttleResult = removeAnonymousThrottler.onEvent();
+                    if (!throttleResult.throttled) {
+                        log.info("removeAnonymousPeers: We close the connection as the peer address is still unknown. " +
+                                "Peer: {}", connection.getPeersNodeAddressOptional());
+                        if (throttleResult.throttledCount > 0) {
+                            log.warn("We have throttled logs for {} removeAnonymousPeers calls. {}", throttleResult.throttledCount, Connection.POSSIBLE_DOS_MESSAGE);
+                        }
+                    }
+
+                    connection.shutDown(CloseConnectionReason.UNKNOWN_PEER_ADDRESS);
+                }
+            });
+        }, THREAD_ID), REMOVE_ANONYMOUS_PEER_SEC);
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Reported peers
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void removeReportedPeer(Peer reportedPeer) {
+        synchronized (reportedPeers) {
+            reportedPeers.remove(reportedPeer);
+            printReportedPeers();
+        }
+
+    }
+
+    private void removeReportedPeer(NodeAddress nodeAddress) {
+        synchronized (reportedPeers) {
+            List<Peer> reportedPeersClone = new ArrayList<>(reportedPeers);
+            reportedPeersClone.stream()
+                    .filter(e -> e.getNodeAddress().equals(nodeAddress))
+                    .findAny()
+                    .ifPresent(this::removeReportedPeer);
+        }
+    }
+
+    private void removeTooOldReportedPeers() {
+        synchronized (reportedPeers) {
+            List<Peer> reportedPeersClone = new ArrayList<>(reportedPeers);
+            Set<Peer> reportedPeersToRemove = reportedPeersClone.stream()
+                    .filter(reportedPeer -> new Date().getTime() - reportedPeer.getDate().getTime() > MAX_AGE)
+                    .collect(Collectors.toSet());
+            reportedPeersToRemove.forEach(this::removeReportedPeer);
+        }
+    }
+
+
+    private void purgeReportedPeersIfExceeds() {
+        synchronized (reportedPeers) {
+            int size = reportedPeers.size();
+            if (size > MAX_REPORTED_PEERS) {
+                log.info("We have already {} reported peers which exceeds our limit of {}." +
+                        "We remove random peers from the reported peers list.", size, MAX_REPORTED_PEERS);
+                int diff = size - MAX_REPORTED_PEERS;
+                List<Peer> list = new ArrayList<>(reportedPeers);
+                // we don't use sorting by lastActivityDate to keep it more random
+                for (int i = 0; i < diff; i++) {
+                    if (!list.isEmpty()) {
+                        Peer toRemove = list.remove(new Random().nextInt(list.size()));
+                        removeReportedPeer(toRemove);
+                    }
+                }
+            } else {
+                log.trace("No need to purge reported peers.\n\tWe don't have more then {} reported peers yet.", MAX_REPORTED_PEERS);
+            }
+        }
+    }
+
+    private void printReportedPeers() {
+        synchronized (reportedPeers) {
+            if (!reportedPeers.isEmpty()) {
+                if (PRINT_REPORTED_PEERS_DETAILS) {
+                    StringBuilder result = new StringBuilder("\n\n------------------------------------------------------------\n" +
+                            "Collected reported peers:");
+                    List<Peer> reportedPeersClone = new ArrayList<>(reportedPeers);
+                    reportedPeersClone.forEach(e -> result.append("\n").append(e));
+                    result.append("\n------------------------------------------------------------\n");
+                    log.trace(result.toString());
+                }
+                log.debug("Number of reported peers: {}", reportedPeers.size());
+            }
+        }
+    }
+
+    private void printNewReportedPeers(Set<Peer> reportedPeers) {
+        synchronized (reportedPeers) {
+            if (PRINT_REPORTED_PEERS_DETAILS) {
+                StringBuilder result = new StringBuilder("We received new reportedPeers:");
+                List<Peer> reportedPeersClone = new ArrayList<>(reportedPeers);
+                reportedPeersClone.forEach(e -> result.append("\n\t").append(e));
+                log.trace(result.toString());
+            }
+            log.debug("Number of new arrived reported peers: {}", reportedPeers.size());
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    //  Persisted peers
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private boolean removePersistedPeer(Peer persistedPeer) {
+        Peer removedPersistedPeer = peerList.getMap().remove(persistedPeer.getNodeAddress().toString());
+        if (removedPersistedPeer != null) {
+            requestPersistence();
+            return true;
+        }
+        return false;
+    }
+
+    private void requestPersistence() {
+        persistenceManager.requestPersistence();
+    }
+
+    private boolean removeSeedNodeAddress(NodeAddress nodeAddress) {
+        synchronized (seedNodeAddresses) {
+            return seedNodeAddresses.remove(nodeAddress);
+        }
+    }
+
+    @SuppressWarnings("UnusedReturnValue")
+    private boolean removePersistedPeer(NodeAddress nodeAddress) {
+        Optional<Peer> optionalPersistedPeer = findPersistedPeer(nodeAddress);
+        return optionalPersistedPeer.isPresent() && removePersistedPeer(optionalPersistedPeer.get());
+    }
+
+    private Optional<Peer> findPersistedPeer(NodeAddress nodeAddress) {
+        return Optional.ofNullable(peerList.getMap().get(nodeAddress.toString()));
+    }
+
+    private void removeTooOldPersistedPeers() {
+        Set<Peer> persistedPeersToRemove = getPersistedPeers().stream()
+                .filter(reportedPeer -> new Date().getTime() - reportedPeer.getDate().getTime() > MAX_AGE)
+                .collect(Collectors.toSet());
+        persistedPeersToRemove.forEach(this::removePersistedPeer);
+    }
+
+    private void purgePersistedPeersIfExceeds() {
+        int size = peerList.size();
+        int limit = MAX_PERSISTED_PEERS;
+        if (size > limit) {
+            log.trace("We have already {} persisted peers which exceeds our limit of {}." +
+                    "We remove random peers from the persisted peers list.", size, limit);
+            int diff = size - limit;
+            List<Peer> list = new ArrayList<>(getPersistedPeers());
+            // we don't use sorting by lastActivityDate to avoid attack vectors and keep it more random
+            for (int i = 0; i < diff; i++) {
+                if (!list.isEmpty()) {
+                    Peer toRemove = list.remove(new Random().nextInt(list.size()));
+                    removePersistedPeer(toRemove);
+                }
+            }
+        } else {
+            log.trace("No need to purge persisted peers.\n\tWe don't have more then {} persisted peers yet.", MAX_PERSISTED_PEERS);
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Getters
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public int getMaxConnections() {
+        return maxConnections;
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Listeners
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public void addListener(Listener listener) {
+        synchronized (listeners) {
+            listeners.add(listener);
+        }
+    }
+
+    public void removeListener(Listener listener) {
+        synchronized (listeners) {
+            listeners.remove(listener);
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    //  Private misc
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    // Modify this to change the relationships between connection limits.
+    // maxConnections default 12
+    private void setConnectionLimits(int maxConnections) {
+        this.maxConnections = maxConnections;                                                     // app node 12; seedNode 20
+        minConnections = Math.max(1, (int) Math.round(maxConnections * 0.7));                     // app node  8; seedNode 14
+        outBoundPeerTrigger = Math.max(4, (int) Math.round(maxConnections * 1.3));                // app node 16; seedNode 26
+        initialDataExchangeTrigger = Math.max(8, (int) Math.round(maxConnections * 1.7));         // app node 20; seedNode 34
+        maxConnectionsAbsolute = Math.max(12, (int) Math.round(maxConnections * 2.5));            // app node 30; seedNode 50
+    }
+
+    private Set<Peer> getConnectedReportedPeers() {
+        // networkNode.getConfirmedConnections includes:
+        // filter(connection -> connection.getPeersNodeAddressOptional().isPresent())
+        return networkNode.getConfirmedConnections().stream()
+                // A dial target is not live until it has sent a valid message
+                .filter(connection -> !connection.isStopped() && connection.getStatistic().getLastReceivedMessageTimestamp() > 0)
+                .map((Connection connection) -> {
+                    Capabilities supportedCapabilities = new Capabilities(connection.getCapabilities());
+                    // If we have a new connection the supportedCapabilities is empty.
+                    // We lookup if we have already stored the supportedCapabilities at the persisted or reported peers
+                    // and if so we use that.
+                    Optional<NodeAddress> peersNodeAddressOptional = connection.getPeersNodeAddressOptional();
+                    checkArgument(peersNodeAddressOptional.isPresent()); // getConfirmedConnections delivers only connections where we know the address
+                    NodeAddress peersNodeAddress = peersNodeAddressOptional.get();
+                    boolean capabilitiesNotFoundInConnection = supportedCapabilities.isEmpty();
+                    if (capabilitiesNotFoundInConnection) {
+                        // If not found in connection we look up if we got the Capabilities set from any of the
+                        // reported or persisted peers
+                        Set<Peer> persistedAndReported = null;
+                        persistedAndReported = new HashSet<>(getPersistedPeers());
+                        synchronized (reportedPeers) {
+                            persistedAndReported.addAll(reportedPeers);
+                        }
+                        Optional<Peer> candidate = persistedAndReported.stream()
+                                .filter(peer -> peer.getNodeAddress().equals(peersNodeAddress))
+                                .filter(peer -> !peer.getCapabilities().isEmpty())
+                                .findAny();
+                        if (candidate.isPresent()) {
+                            supportedCapabilities = new Capabilities(candidate.get().getCapabilities());
+                        }
+                    }
+                    Peer peer = new Peer(peersNodeAddress, supportedCapabilities);
+
+                    // If we did not found the capability from our own connection we add a listener,
+                    // so once we get a connection with that peer and exchange a message containing the capabilities
+                    // we get set the capabilities.
+                    if (capabilitiesNotFoundInConnection) {
+                        connection.addWeakCapabilitiesListener(peer);
+                    }
+                    return peer;
+                })
+                .collect(Collectors.toSet());
+    }
+
+    private void stopCheckMaxConnectionsTimer() {
+        if (checkMaxConnectionsTimer != null) {
+            checkMaxConnectionsTimer.stop();
+            checkMaxConnectionsTimer = null;
+        }
+    }
+
+    private void stopRecoveryGraceTimer() {
+        recoveryGraceEpoch++;
+        if (recoveryGraceTimer != null) {
+            recoveryGraceTimer.stop();
+            recoveryGraceTimer = null;
+        }
+    }
+
+    private void printStatistics() {
+        String ls = System.lineSeparator();
+        StringBuilder sb = new StringBuilder("Connection statistics: " + ls);
+        AtomicInteger counter = new AtomicInteger();
+        networkNode.getAllConnections().stream()
+                .sorted(Comparator.comparingLong(o -> o.getConnectionStatistics().getConnectionCreationTimeStamp()))
+                .forEach(e -> sb.append(ls).append("Connection ")
+                        .append(counter.incrementAndGet()).append(ls)
+                        .append(e.getConnectionStatistics().getInfo()).append(ls));
+        log.debug(sb.toString());
+    }
+
+    private void printConnectedPeers() {
+        if (!networkNode.getConfirmedConnections().isEmpty()) {
+            StringBuilder result = new StringBuilder("\n\n------------------------------------------------------------\n" +
+                    "Connected peers for node " + networkNode.getNodeAddress() + ":");
+            networkNode.getConfirmedConnections().forEach(e -> result.append("\n")
+                    .append(e.getPeersNodeAddressOptional()).append(" ").append(e.getConnectionState().getPeerType()));
+            result.append("\n------------------------------------------------------------\n");
+            log.debug(result.toString());
+        }
+    }
+}

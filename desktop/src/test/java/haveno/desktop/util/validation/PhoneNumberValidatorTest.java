@@ -1,0 +1,429 @@
+package haveno.desktop.util.validation;
+
+import haveno.core.locale.Res;
+import haveno.core.payment.MbWayAccount;
+import haveno.core.payment.PagoMovilAccount;
+import haveno.core.payment.SwishAccount;
+import haveno.core.payment.TwintAccount;
+import haveno.core.payment.payload.SwishAccountPayload;
+import haveno.core.payment.payload.MbWayAccountPayload;
+import haveno.core.payment.payload.PagoMovilAccountPayload;
+import haveno.core.payment.payload.TwintAccountPayload;
+import haveno.core.payment.validation.PhoneNumberValidator;
+import haveno.core.payment.validation.MbWayValidator;
+import haveno.core.payment.validation.PagoMovilValidator;
+import haveno.core.payment.validation.SwishValidator;
+import haveno.core.payment.validation.TwintValidator;
+import haveno.core.util.validation.InputValidator;
+import haveno.core.util.validation.InputValidator.ValidationResult;
+import haveno.desktop.components.paymentmethods.SwishForm;
+import haveno.desktop.components.paymentmethods.MbWayForm;
+import haveno.desktop.components.paymentmethods.PagoMovilForm;
+import haveno.desktop.components.paymentmethods.TwintForm;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+public class PhoneNumberValidatorTest {
+    private PhoneNumberValidator validator;
+    private ValidationResult validationResult;
+
+    @BeforeEach
+    public void setup() {
+        Res.setup();
+    }
+
+    @Test
+    public void testMbWayFormValidationPreservesStoredNumber() {
+        MbWayAccount account = new MbWayAccount();
+        account.init();
+        account.setAccountName("mb way account");
+        account.setHolderName("Alice");
+        ((MbWayAccountPayload) account.getPaymentAccountPayload()).setMobileNr("912 345 678");
+        byte[] witnessInput = account.getPaymentAccountPayload().getAgeWitnessInputData();
+        MbWayForm form = new MbWayForm(account, null, new MbWayValidator(), new InputValidator(), null, 0, null);
+        account.setAccountName("renamed account");
+        form.updateAllInputsValid();
+        assertTrue(form.allInputsValidProperty().get());
+        assertEquals("912 345 678", account.getMobileNr());
+        assertArrayEquals(witnessInput, account.getPaymentAccountPayload().getAgeWitnessInputData());
+    }
+
+    @Test
+    public void testPagoMovilFormValidationPreservesStoredNumber() {
+        PagoMovilAccount account = new PagoMovilAccount();
+        account.init();
+        account.setAccountName("pago movil account");
+        account.setHolderName("Alice");
+        account.setHolderTaxId("V12345678");
+        account.setBankName("Bank");
+        ((PagoMovilAccountPayload) account.getPaymentAccountPayload()).setMobileNr("0412 123 4567");
+        byte[] witnessInput = account.getPaymentAccountPayload().getAgeWitnessInputData();
+        PagoMovilForm form = new PagoMovilForm(account, null, new PagoMovilValidator(), new InputValidator(), null, 0, null);
+        account.setAccountName("renamed account");
+        form.updateAllInputsValid();
+        assertTrue(form.allInputsValidProperty().get());
+        assertEquals("0412 123 4567", account.getMobileNr());
+        assertArrayEquals(witnessInput, account.getPaymentAccountPayload().getAgeWitnessInputData());
+    }
+
+    @Test
+    public void testSwishNumbers() {
+        validator = new SwishValidator();
+        for (String input : List.of("070 123 45 67", "070-123-45-67", "+46 (0)70 123 45 67", "+46 70 123 45 67", "+46701234567", "46701234567")) {
+            assertTrue(validator.validate(input).isValid);
+            assertEquals("+46701234567", validator.getNormalizedPhoneNumber());
+        }
+        for (String input : List.of("+46701234567", "+4600701234567")) {
+            assertTrue(validator.validate(input).isValid);
+            assertEquals(input, validator.getNormalizedPhoneNumber());
+            assertTrue(validator.validate(validator.getNormalizedPhoneNumber()).isValid);
+            assertEquals(input, validator.getNormalizedPhoneNumber());
+        }
+        assertFalse(validator.validate("not a phone").isValid);
+        assertNull(validator.getNormalizedPhoneNumber());
+        assertFalse(validator.validate(null).isValid);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testSwishFormValidationPreservesStoredNumber() {
+        for (String input : List.of("070 123 45 67", "+460701234567")) {
+            SwishAccount account = new SwishAccount();
+            account.init();
+            account.setAccountName("swish account");
+            account.setHolderName("Alice");
+            ((SwishAccountPayload) account.getPaymentAccountPayload()).setMobileNr(input);
+            byte[] witnessInput = account.getPaymentAccountPayload().getAgeWitnessInputData();
+            // Validation does not require rendered controls.
+            SwishForm form = new SwishForm(account, null, new SwishValidator(), new InputValidator(), null, 0, null);
+            account.setAccountName("renamed account");
+            form.updateAllInputsValid();
+            assertTrue(form.allInputsValidProperty().get());
+            assertEquals(input, account.getMobileNr());
+            assertArrayEquals(witnessInput, account.getPaymentAccountPayload().getAgeWitnessInputData());
+        }
+    }
+
+    @Test
+    public void testTwintNumbers() {
+        validator = new TwintValidator();
+        for (String input : List.of("079 123 45 67", "+41 (0)79 123 45 67", "+41791234567", "41791234567")) {
+            assertTrue(validator.validate(input).isValid);
+            assertEquals("+41791234567", validator.getNormalizedPhoneNumber());
+        }
+        for (String input : List.of("+41791234567", "+4100791234567")) {
+            assertTrue(validator.validate(input).isValid);
+            assertEquals(input, validator.getNormalizedPhoneNumber());
+            assertTrue(validator.validate(validator.getNormalizedPhoneNumber()).isValid);
+            assertEquals(input, validator.getNormalizedPhoneNumber());
+        }
+        assertFalse(validator.validate("not a phone").isValid);
+        assertNull(validator.getNormalizedPhoneNumber());
+        assertFalse(validator.validate(null).isValid);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testTwintFormValidationPreservesStoredNumber() {
+        for (String input : List.of("079 123 45 67", "+410791234567")) {
+            TwintAccount account = new TwintAccount();
+            account.init();
+            account.setAccountName("twint account");
+            account.setHolderName("Alice");
+            ((TwintAccountPayload) account.getPaymentAccountPayload()).setMobileNr(input);
+            byte[] witnessInput = account.getPaymentAccountPayload().getAgeWitnessInputData();
+            // Validation does not require rendered controls.
+            TwintForm form = new TwintForm(account, null, new TwintValidator(), new InputValidator(), null, 0, null);
+            account.setAccountName("renamed account");
+            form.updateAllInputsValid();
+            assertTrue(form.allInputsValidProperty().get());
+            assertEquals(input, account.getMobileNr());
+            assertArrayEquals(witnessInput, account.getPaymentAccountPayload().getAgeWitnessInputData());
+        }
+    }
+
+    @Test
+    public void testMissingCountryCode() {
+        validator = new PhoneNumberValidator();
+        validationResult = validator.validate("+12124567890");
+        assertFalse(validationResult.isValid, "Should not be valid if validator's country code is missing");
+        assertEquals(Res.get("validation.phone.missingCountryCode"), validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testNoInput() {
+        validator = new PhoneNumberValidator("AT");
+        validationResult = validator.validate("");
+        assertFalse(validationResult.isValid, "'' should not be a valid number in AT");
+        assertEquals(Res.get("validation.empty"), validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate(null);
+        assertFalse(validationResult.isValid, "'' should not be a valid number in AT");
+        assertEquals(Res.get("validation.empty"), validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testAustriaNumbers() {
+        validator = new PhoneNumberValidator("AT");
+        assertEquals(validator.getCallingCode(), "43");
+
+        validationResult = validator.validate("(0316) 214 4366");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4303162144366", validator.getNormalizedPhoneNumber());
+        // 1 Vienna
+        validationResult = validator.validate("+43 1 214-3512");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4312143512", validator.getNormalizedPhoneNumber());
+        // 1 Vienna cell
+        validationResult = validator.validate("+43 1 650 454 0987");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4316504540987", validator.getNormalizedPhoneNumber());
+        // 676 T-Mobile
+        validationResult = validator.validate("0676 2241647");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4306762241647", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testInvalidAustriaNumbers() {
+        validator = new PhoneNumberValidator("AT"); // AT country code is +43
+        validationResult = validator.validate("+43 1 214");
+        assertFalse(validationResult.isValid, "+43 1 214 should not be a valid number in AT");
+        assertEquals(Res.get("validation.phone.insufficientDigits", "+43 1 214"), validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+42 1 650 454 0987");
+        assertFalse(validationResult.isValid, "+42 1 650 454 0987 should not be a valid number in AT");
+        assertEquals(Res.get("validation.phone.invalidDialingCode", "+42 1 650 454 0987", "AT", validator.getCallingCode()),
+                validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testDominicanRepublicNumbers() {
+        validator = new PhoneNumberValidator("DO");
+        assertEquals(validator.getCallingCode(), "1");
+        validationResult = validator.validate("1829-123 4567");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18291234567", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+18091234567");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18091234567", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+1 (849) 543-0098");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18495430098", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testBrazilNumbers() {
+        validator = new PhoneNumberValidator("BR");
+        assertEquals(validator.getCallingCode(), "55");
+        validationResult = validator.validate("11 3333 5555");
+        assertTrue(validationResult.isValid);
+        assertEquals("+551133335555", validator.getNormalizedPhoneNumber());
+        // Sao Paulo cell
+        validationResult = validator.validate("55 11 9 3444 2567");
+        assertTrue(validationResult.isValid);
+        assertEquals("+5511934442567", validator.getNormalizedPhoneNumber());
+        // 85 Fortaleza landline using long-distance carrier OI (31)
+        validationResult = validator.validate("031 85 4433 8432");
+        assertTrue(validationResult.isValid);
+        assertEquals("+550318544338432", validator.getNormalizedPhoneNumber());
+    }
+
+
+    @Test
+    public void testCanadaNumbers() {
+        validator = new PhoneNumberValidator("CA");
+        assertEquals(validator.getCallingCode(), "1");
+        validationResult = validator.validate("867 374-8299");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18673748299", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+1 306-374-8299   ");
+        assertTrue(validationResult.isValid);
+        assertEquals("+13063748299", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("   (709) 374-8299");
+        assertTrue(validationResult.isValid);
+        assertEquals("+17093748299", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testInvalidCanadaNumber() {
+        validator = new PhoneNumberValidator("CA");
+        validationResult = validator.validate("+2 1 650 454 0987");
+        assertFalse(validationResult.isValid, "+2 1 650 454 0987 should not be a valid number in CA");
+        assertEquals(Res.get("validation.phone.invalidDialingCode", "+2 1 650 454 0987", "CA", validator.getCallingCode()),
+                validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testChinaNumbers() {
+        validator = new PhoneNumberValidator("CN");
+        assertEquals(validator.getCallingCode(), "86");
+        // In major cities, landline-numbers consist of a two-digit area code followed
+        // by an eight-digit inner-number. In other places, landline-numbers consist of
+        // a three-digit area code followed by a seven- or eight-digit inner-number.
+        // The numbers of mobile phones consist of eleven digits.  Hard to validate.
+        // 10 Beijing
+        validationResult = validator.validate("   10 4534 8214");
+        assertTrue(validationResult.isValid);
+        assertEquals("+861045348214", validator.getNormalizedPhoneNumber());
+        //  21 Shanghai
+        validationResult = validator.validate("+86 (21) 3422-5814");
+        assertTrue(validationResult.isValid);
+        assertEquals("+862134225814", validator.getNormalizedPhoneNumber());
+        // 18x  Mobile phone numbers have 11 digits in the format 1xx-xxxx-xxxx,
+        // in which the first three digits (e.g. 13x, 14x,15x,17x and 18x) designate
+        // the mobile phone service provider.
+        validationResult = validator.validate("180-4353-7877"); // no country code prefix
+        assertTrue(validationResult.isValid);
+        assertEquals("+8618043537877", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testJapanNumbers() {
+        validator = new PhoneNumberValidator("JP");
+        assertEquals(validator.getCallingCode(), "81");
+        // 11 Sapporo  011-XXX-XXXX
+        validationResult = validator.validate("11 367-2345");
+        assertTrue(validationResult.isValid);
+        assertEquals("+81113672345", validator.getNormalizedPhoneNumber());
+
+        //  0476 Narita,  0476-XX-XXXX
+        validationResult = validator.validate("0476 87 2055");
+        assertTrue(validationResult.isValid);
+        assertEquals("+810476872055", validator.getNormalizedPhoneNumber());
+
+        //  03 Tokyo  03-XXXX-XXXX
+        validationResult = validator.validate("03-3129-5367");
+        assertTrue(validationResult.isValid);
+        assertEquals("+810331295367", validator.getNormalizedPhoneNumber());
+
+        // 090 Cell number (area code)
+        validationResult = validator.validate("(090) 3129-5367");
+        assertTrue(validationResult.isValid);
+        assertEquals("+8109031295367", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testRussiaNumbers() {
+        validator = new PhoneNumberValidator("RU");
+        assertEquals(validator.getCallingCode(), "7");
+        // Moscow has four area codes: 495, 496, 498 and 499
+        validationResult = validator.validate("499 345-99-36");
+        assertTrue(validationResult.isValid);
+        assertEquals("+74993459936", validator.getNormalizedPhoneNumber());
+
+        // 812 St. Peter
+        validationResult = validator.validate("+7 812 567-22-11");
+        assertTrue(validationResult.isValid);
+        assertEquals("+78125672211", validator.getNormalizedPhoneNumber());
+
+        // 395 Irkutsk Oblast Call from  outside  RU
+        validationResult = validator.validate("+7 395 232-88-35");
+        assertTrue(validationResult.isValid);
+        assertEquals("+73952328835", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testUKNumber() {
+        validator = new PhoneNumberValidator("GB");
+        assertEquals(validator.getCallingCode(), "44");
+        validationResult = validator.validate("020 7946 0230");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4402079460230", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+ 44 20 79 46 00 93");
+        assertTrue(validationResult.isValid);
+        assertEquals("+442079460093", validator.getNormalizedPhoneNumber());
+
+        // (0114) Sheffield
+        validationResult = validator.validate("(0114) 436 8888");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4401144368888", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+44 11 44368888");
+        assertTrue(validationResult.isValid);
+        assertEquals("+441144368888", validator.getNormalizedPhoneNumber());
+
+        // (0131) xxx xxxx Edinburgh
+        validationResult = validator.validate("(0131) 267 1111");
+        assertTrue(validationResult.isValid);
+        assertEquals("+4401312671111", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("131 267-1111");
+        assertTrue(validationResult.isValid);
+        assertEquals("+441312671111", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testUSNumber() {
+        validator = new PhoneNumberValidator("US");
+        assertEquals(validator.getCallingCode(), "1");
+        validationResult = validator.validate("(800) 253 0000");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18002530000", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+ 1 800 253-0000");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18002530000", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("8002530000");
+        assertTrue(validationResult.isValid);
+        assertEquals("+18002530000", validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testInvalidUSNumbers() {
+        validator = new PhoneNumberValidator("US");
+        validationResult = validator.validate("+1 512 GR8 0150");
+        assertFalse(validationResult.isValid, "+1 512 GR8 0150 should not be a valid number in US");
+        assertEquals(Res.get("validation.phone.invalidCharacters", "+1 512 GR8 0150", "US", validator.getCallingCode()),
+                validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("+1 212-3456-0150-9832");
+        assertFalse(validationResult.isValid, "+1 212-3456-0150-9832 should not be a valid number in US");
+        assertEquals(Res.get("validation.phone.tooManyDigits", "+1 212-3456-0150-9832", "US", validator.getCallingCode()),
+                validationResult.errorMessage);
+        assertNull(validator.getNormalizedPhoneNumber());
+    }
+
+    @Test
+    public void testUSAreaCodeMatchesCallingCode() {
+        // These are not valid US numbers because these area codes
+        // do not exist, but validating all area codes on the globe
+        // is probably too expensive.  We have to trust end users
+        // to input correct area/region codes.
+        validator = new PhoneNumberValidator("US");
+        assertEquals(validator.getCallingCode(), "1");
+        validationResult = validator.validate("1 (1) 253 0000");
+        assertTrue(validationResult.isValid);
+        assertEquals("+112530000", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("1-120-253 0000");
+        assertTrue(validationResult.isValid);
+        assertEquals("+11202530000", validator.getNormalizedPhoneNumber());
+
+        validationResult = validator.validate("(120) 253 0000");
+        assertTrue(validationResult.isValid);
+        // TODO validator incorrectly treats input as if it were +1 (202) 53-0000
+        /// assertEquals("+1202530000", validator.getNormalizedPhoneNumber());
+    }
+}

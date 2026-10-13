@@ -1,0 +1,18 @@
+getpaymentmethods
+
+NAME
+----
+getpaymentmethods - get supported payment methods
+
+SYNOPSIS
+--------
+getpaymentmethods
+
+DESCRIPTION
+-----------
+Returns the ids of all supported traditional payment methods.
+
+EXAMPLES
+--------
+Get supported payment methods:
+$ ./haveno-cli --password=xyz --port=9998 getpaymentmethods

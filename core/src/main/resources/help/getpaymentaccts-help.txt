@@ -1,0 +1,18 @@
+getpaymentaccts
+
+NAME
+----
+getpaymentaccts - get payment accounts
+
+SYNOPSIS
+--------
+getpaymentaccts
+
+DESCRIPTION
+-----------
+Returns all saved payment accounts.
+
+EXAMPLES
+--------
+Get payment accounts:
+$ ./haveno-cli --password=xyz --port=9998 getpaymentaccts

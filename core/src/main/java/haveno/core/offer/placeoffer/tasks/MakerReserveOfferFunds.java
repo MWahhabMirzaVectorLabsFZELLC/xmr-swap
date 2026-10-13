@@ -1,0 +1,209 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.offer.placeoffer.tasks;
+
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Set;
+
+import haveno.common.taskrunner.Task;
+import haveno.common.taskrunner.TaskRunner;
+import haveno.core.offer.Offer;
+import haveno.core.offer.OfferDirection;
+import haveno.core.offer.OpenOffer;
+import haveno.core.offer.placeoffer.PlaceOfferModel;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.trade.protocol.TradeProtocol;
+import haveno.core.xmr.model.XmrAddressEntry;
+import lombok.extern.slf4j.Slf4j;
+import monero.common.MoneroRpcConnection;
+import monero.daemon.model.MoneroOutput;
+import monero.wallet.model.MoneroOutputWallet;
+import monero.wallet.model.MoneroTxWallet;
+
+@Slf4j
+public class MakerReserveOfferFunds extends Task<PlaceOfferModel> {
+
+    private List<OpenOffer> offerGroup; // group snapshot before reserving so removed members still receive the reserve tx
+
+    public MakerReserveOfferFunds(TaskRunner taskHandler, PlaceOfferModel model) {
+        super(taskHandler, model);
+    }
+
+    @Override
+    protected void run() {
+
+        OpenOffer openOffer = model.getOpenOffer();
+        Offer offer = openOffer.getOffer();
+
+        try {
+            runInterceptHook();
+
+            // skip if reserve tx already created
+            if (openOffer.getReserveTxHash() != null && !openOffer.getReserveTxHash().isEmpty()) {
+                log.info("Reserve tx already created for offerId={}", openOffer.getShortId());
+
+                // verify reserve tx key images
+                if (openOffer.getOffer().getOfferPayload().getReserveTxKeyImages() == null || openOffer.getOffer().getOfferPayload().getReserveTxKeyImages().isEmpty()) {
+                    log.warn("Reserve tx key images missing for offerId={}", openOffer.getShortId());
+                    setReserveTx(null);
+                } else {
+                    complete();
+                    return;
+                }
+            }
+
+            // verify monero connection
+            model.getXmrWalletService().getXmrConnectionService().verifyConnection();
+
+            // collect relevant info
+            BigInteger makerFee = offer.getMaxMakerFee();
+            BigInteger sendAmount = offer.getDirection() == OfferDirection.BUY ? BigInteger.ZERO : offer.getAmount();
+            BigInteger securityDeposit = offer.getDirection() == OfferDirection.BUY ? offer.getMaxBuyerSecurityDeposit() : offer.getMaxSellerSecurityDeposit();
+            BigInteger penaltyFee = HavenoUtils.multiply(securityDeposit, offer.getPenaltyFeePct());
+            String returnAddress = model.getXmrWalletService().getOrCreateAddressEntry(offer.getId(), XmrAddressEntry.Context.TRADE_PAYOUT).getAddressString();
+            XmrAddressEntry fundingEntry = model.getXmrWalletService().getAddressEntry(offer.getId(), XmrAddressEntry.Context.OFFER_FUNDING).orElse(null);
+            Integer preferredSubaddressIndex = fundingEntry == null ? null : fundingEntry.getSubaddressIndex();
+
+            // copy address entries to clones
+            offerGroup = model.getOpenOfferManager().getOpenOfferGroup(openOffer.getGroupId());
+            for (OpenOffer offerClone : offerGroup) {
+                if (offerClone.getId().equals(offer.getId())) continue; // skip self
+                model.getXmrWalletService().cloneAddressEntries(openOffer.getId(), offerClone.getId());
+            }
+                
+            // create reserve tx
+            synchronized (HavenoUtils.xmrWalletService.getWalletLock()) {
+
+                // reset protocol timeout
+                verifyPending();
+                model.getProtocol().startTimeoutTimer();
+
+                // attempt creating reserve tx
+                MoneroTxWallet reserveTx = null;
+                List<String> splitOutputKeyImages = model.getOpenOfferManager().getSplitOutputKeyImages(openOffer);
+                try {
+                    model.getXmrWalletService().thawOutputs(splitOutputKeyImages); // thaw split output to spend it in reserve tx
+                    synchronized (HavenoUtils.getWalletFunctionLock()) {
+                        for (int i = 0; i < TradeProtocol.MAX_ATTEMPTS; i++) {
+                            MoneroRpcConnection sourceConnection = model.getXmrWalletService().getXmrConnectionService().getConnection();
+                            try {
+                                //if (true) throw new RuntimeException("Pretend error");
+                                reserveTx = model.getXmrWalletService().createReserveTx(openOffer, penaltyFee, makerFee, sendAmount, securityDeposit, returnAddress, openOffer.isReserveExactAmount(), preferredSubaddressIndex);
+                            } catch (IllegalStateException e) {
+                                log.warn("Illegal state creating reserve tx, offerId={}, error={}", openOffer.getShortId(), i + 1, e.getMessage());
+                                throw e;
+                            } catch (Exception e) {
+                                log.warn("Error creating reserve tx, offerId={}, attempt={}/{}, error={}", openOffer.getShortId(), i + 1, TradeProtocol.MAX_ATTEMPTS, e.getMessage());
+                                model.getXmrWalletService().handleMainWalletError(e, sourceConnection, i + 1);
+                                verifyPending();
+                                if (i == TradeProtocol.MAX_ATTEMPTS - 1) throw e;
+                                model.getProtocol().startTimeoutTimer(); // reset protocol timeout
+                                HavenoUtils.waitFor(TradeProtocol.REPROCESS_DELAY_MS); // wait before retrying
+                            }
+        
+                            // verify still open
+                            verifyPending();
+                            if (reserveTx != null) break;
+                        }
+                    }
+                } catch (Exception e) {
+
+                    // reset state with wallet lock
+                    setReserveTx(null);
+                    model.getXmrWalletService().resetAddressEntriesForOpenOffer(offer.getId());
+                    if (reserveTx != null) model.getXmrWalletService().thawOutputs(HavenoUtils.getInputKeyImages(reserveTx));
+                    model.getXmrWalletService().freezeOutputs(splitOutputKeyImages);
+                    throw e;
+                }
+
+                // reset protocol timeout
+                model.getProtocol().startTimeoutTimer();
+
+                // update offer reserve tx
+                setReserveTx(reserveTx);
+
+                // reset offer funding address entries if unused
+                if (fundingEntry != null) {
+
+                    // get reserve tx inputs
+                    List<MoneroOutputWallet> inputs = model.getXmrWalletService().getOutputs(openOffer.getOffer().getOfferPayload().getReserveTxKeyImages());
+
+                    // collect subaddress indices of inputs
+                    Set<Integer> inputSubaddressIndices = new HashSet<>();
+                    for (MoneroOutputWallet input : inputs) {
+                        if (input.getAccountIndex() == 0) inputSubaddressIndices.add(input.getSubaddressIndex());
+                    }
+
+                    // swap funding address entries to available if unused
+                    for (OpenOffer clone : model.getOpenOfferManager().getOpenOfferGroup(model.getOpenOffer().getGroupId())) {
+                        XmrAddressEntry cloneFundingEntry = model.getXmrWalletService().getAddressEntry(clone.getId(), XmrAddressEntry.Context.OFFER_FUNDING).orElse(null);
+                        if (cloneFundingEntry != null && !inputSubaddressIndices.contains(cloneFundingEntry.getSubaddressIndex())) {
+                            if (inputSubaddressIndices.contains(cloneFundingEntry.getSubaddressIndex())) {
+                                model.getXmrWalletService().swapAddressEntryToAvailable(offer.getId(), XmrAddressEntry.Context.OFFER_FUNDING);
+                            }
+                        }
+                    }
+                }
+            }
+            complete();
+        } catch (Throwable t) {
+            offer.setErrorMessage("An error occurred.\n" +
+                "Error message:\n"
+                + t.getMessage());
+            failed(t);
+        }
+    }
+
+    private void setReserveTx(MoneroTxWallet reserveTx) {
+        OpenOffer openOffer = model.getOpenOffer();
+
+        // collect reserved key images
+        List<String> reservedKeyImages = null;
+        if (reserveTx != null) {
+            reservedKeyImages = new ArrayList<String>();
+            for (MoneroOutput input : reserveTx.getInputs()) reservedKeyImages.add(input.getKeyImage().getHex());
+        }
+
+        // collect offers to update by instance, including any removed while reserving so their cancellation thaws the inputs
+        Set<OpenOffer> offersToUpdate = Collections.newSetFromMap(new IdentityHashMap<OpenOffer, Boolean>());
+        offersToUpdate.add(openOffer);
+        if (offerGroup != null) offersToUpdate.addAll(offerGroup);
+        offersToUpdate.addAll(model.getOpenOfferManager().getOpenOfferGroup(openOffer.getGroupId()));
+
+        // update offer state
+        for (OpenOffer offerToUpdate : offersToUpdate) {
+            offerToUpdate.setReserveTxHash(reserveTx == null ? null : reserveTx.getHash());
+            offerToUpdate.setReserveTxHex(reserveTx == null ? null : reserveTx.getFullHex());
+            offerToUpdate.setReserveTxKey(reserveTx == null ? null : reserveTx.getKey());
+            offerToUpdate.getOffer().getOfferPayload().setReserveTxKeyImages(reservedKeyImages);
+        }
+    }
+
+    private boolean isPending() {
+        return model.getOpenOffer().isPending();
+    }
+
+    private void verifyPending() {
+        if (!isPending()) throw new RuntimeException("Offer " + model.getOpenOffer().getOffer().getId() + " is canceled");
+    }
+}

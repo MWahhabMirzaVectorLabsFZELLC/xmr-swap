@@ -1,0 +1,69 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.payment;
+
+import haveno.core.api.model.PaymentAccountFormField;
+import haveno.core.locale.Country;
+import haveno.core.locale.CountryUtil;
+import haveno.core.locale.TraditionalCurrency;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.payment.payload.PaymentMethod;
+import lombok.NonNull;
+
+import javax.annotation.Nullable;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Base class for IFSC based India bank transfers (NEFT, RTGS, IMPS), which share the
+ * holder name / account number / IFSC code form fields. India and INR are fixed.
+ */
+abstract public class IfscBasedAccount extends CountryBasedPaymentAccount {
+
+    public static final List<TradeCurrency> SUPPORTED_CURRENCIES = List.of(new TraditionalCurrency("INR"));
+
+    private static final List<PaymentAccountFormField.FieldId> INPUT_FIELD_IDS = List.of(
+            PaymentAccountFormField.FieldId.COUNTRY,
+            PaymentAccountFormField.FieldId.HOLDER_NAME,
+            PaymentAccountFormField.FieldId.ACCOUNT_NR,
+            PaymentAccountFormField.FieldId.IFSC,
+            PaymentAccountFormField.FieldId.ACCOUNT_NAME,
+            PaymentAccountFormField.FieldId.SALT
+    );
+
+    protected IfscBasedAccount(PaymentMethod paymentMethod) {
+        super(paymentMethod);
+        setSingleTradeCurrency(SUPPORTED_CURRENCIES.get(0)); // this payment method is only for India/INR
+    }
+
+    @Override
+    public @NonNull List<TradeCurrency> getSupportedCurrencies() {
+        return SUPPORTED_CURRENCIES;
+    }
+
+    @Override
+    public @NonNull List<PaymentAccountFormField.FieldId> getInputFieldIds() {
+        return INPUT_FIELD_IDS;
+    }
+
+    @Override
+    @Nullable
+    public List<Country> getSupportedCountries() {
+        return Arrays.asList(CountryUtil.findCountryByCode("IN").get());
+    }
+}

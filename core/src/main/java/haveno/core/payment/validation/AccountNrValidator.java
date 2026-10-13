@@ -1,0 +1,175 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.payment.validation;
+
+import haveno.core.locale.BankUtil;
+import haveno.core.locale.Res;
+import org.apache.commons.lang3.StringUtils;
+
+public final class AccountNrValidator extends BankValidator {
+    public AccountNrValidator(String countryCode) {
+        super(countryCode);
+    }
+
+    @Override
+    public ValidationResult validate(String input) {
+        int length;
+        String input2;
+        switch (countryCode) {
+            case "GB":
+                length = 8;
+                if (isNumberWithFixedLength(input, length))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNr", length));
+            case "US":
+                if (isNumberInRange(input, 4, 17))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNr", "4 - 17"));
+            case "BR":
+                if (isStringInRange(input, 1, 20))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrChars", "1 - 20"));
+            case "NZ":
+                input2 = input != null ? input.replaceAll("-", "") : null;
+                if (isNumberInRange(input2, 15, 16))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrFormat", "03-1587-0050000-00"));
+            case "AU":
+                if (isNumberInRange(input, 4, 10))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNr", "4 - 10"));
+            case "CA":
+                if (isNumberInRange(input, 7, 12))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNr", "7 - 12"));
+            case "MX":
+                length = 18;
+                if (isNumberWithFixedLength(input, length))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.sortCodeNumber", getLabel(), length));
+            case "HK":
+                input2 = input != null ? input.replaceAll("-", "") : null;
+                if (isNumberInRange(input2, 9, 12))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrFormat", "005-231289-112"));
+            case "ID":
+                input2 = input != null ? input.replaceAll("-", "") : null;
+                if (isNumberInRange(input2, 6, 16))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNr", "6 - 16"));
+            case "TR":
+                input2 = input != null ? input.replaceAll("[\\s-]", "") : null;
+                // accept a 10-digit Papara number, an 11-digit mobile number (FAST Kolay Adres) or a Turkish IBAN
+                if (isNumberInRange(input2, 10, 11) || new IBANValidator("TR").validate(input2).isValid)
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrFormat", "1234567890 or TR12 3456 7890 1234 5678 9012 34"));
+            case "PK":
+                input2 = input != null ? input.replaceAll("[\\s-]", "") : null;
+                // accept an 11-digit mobile number (Raast alias / Easypaisa / JazzCash) or a Pakistani IBAN
+                if (isNumberWithFixedLength(input2, 11) || new IBANValidator("PK").validate(input2).isValid)
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrFormat", "03001234567 or PK12 ABCD 1234 5678 9012 3456"));
+            case "SG":
+                input2 = input != null ? input.replaceAll("[\\s-]", "") : null;
+                // accept a PayNow mobile number (optional +65 prefix) or NRIC/FIN
+                if (input2 != null && (input2.matches("(\\+?65)?[89][0-9]{7}") || input2.matches("(?i)[STFGM][0-9]{7}[A-Z]")))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrFormat", "91234567 or S1234567A"));
+            case "MY":
+                input2 = input != null ? input.replaceAll("[\\s-]", "") : null;
+                // accept a DuitNow proxy: Malaysian mobile number (01x or +60 prefix) or 12-digit NRIC
+                if (input2 != null && (input2.matches("01[0-9]{8,9}") || input2.matches("\\+?601[0-9]{8,9}") || input2.matches("[0-9]{12}")))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNrFormat", "0123456789, +60 12 345 6789 or 901231-14-5678"));
+            case "NG":
+                length = 10;
+                if (isNumberWithFixedLength(input, length))
+                    return super.validate(input);
+                else
+                    return new ValidationResult(false, Res.get("validation.accountNr", length));
+            case "NO":
+                if (input != null) {
+                    length = 11;
+                    // Provided by sturles:
+                    // https://github.com/bisq-network/exchange/pull/707
+
+                    // https://no.wikipedia.org/wiki/MOD11#Implementasjoner_i_forskjellige_programmeringspr.C3.A5k
+                    // https://en.wikipedia.org/wiki/International_Bank_Account_Number#Generating_IBAN_check_digits6
+
+                    // 11 digits, last digit is checksum.  Checksum algoritm is
+                    // MOD11 with weights 2,3,4,5,6,7,2,3,4,5 right to left.
+                    // First remove whitespace and periods.  Normal formatting is:
+                    // 1234.56.78903
+                    input2 = StringUtils.remove(input, " ");
+                    input2 = StringUtils.remove(input2, ".");
+                    // 11 digits, numbers only
+                    if (input2.length() != length || !StringUtils.isNumeric(input2))
+                        return new ValidationResult(false, Res.get("validation.sortCodeNumber", getLabel(), length));
+                    int lastDigit = Character.getNumericValue(input2.charAt(input2.length() - 1));
+                    if (getMod11ControlDigit(input2) != lastDigit)
+                        return new ValidationResult(false, "Kontonummer har feil sjekksum"); // not translated
+                    else
+                        return super.validate(input);
+                } else {
+                    return super.validate(null);
+                }
+            default:
+                return super.validate(input);
+        }
+
+    }
+
+    private int getMod11ControlDigit(String accountNrString) {
+        int sumForMod = 0;
+        int controlNumber = 2;
+        char[] accountNr = accountNrString.toCharArray();
+
+        for (int i = accountNr.length - 2; i >= 0; i--) {
+            sumForMod += (Character.getNumericValue(accountNr[i]) * controlNumber);
+            controlNumber++;
+
+            if (controlNumber > 7) {
+                controlNumber = 2;
+            }
+        }
+        int calculus = (11 - sumForMod % 11);
+        if (calculus == 11) {
+            return 0;
+        } else {
+            return calculus;
+        }
+    }
+
+    private String getLabel() {
+        String label = BankUtil.getAccountNrLabel(countryCode);
+        return label.substring(0, label.length() - 1);
+    }
+}

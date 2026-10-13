@@ -1,0 +1,18 @@
+getfundingaddresses
+
+NAME
+----
+getfundingaddresses - get wallet funding addresses
+
+SYNOPSIS
+--------
+getfundingaddresses
+
+DESCRIPTION
+-----------
+Returns a list of receiving addresses in the Haveno server wallet, with their balances.
+
+EXAMPLES
+--------
+Show funding addresses:
+$ ./haveno-cli --password=xyz --port=9998 getfundingaddresses

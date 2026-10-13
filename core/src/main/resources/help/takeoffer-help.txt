@@ -1,0 +1,41 @@
+takeoffer
+
+NAME
+----
+takeoffer - take an offer to buy or sell XMR
+
+SYNOPSIS
+--------
+takeoffer
+		--offer-id=<value>
+		--payment-account-id=<value>
+		--amount=<value>
+		--challenge=<value>
+
+DESCRIPTION
+-----------
+Take an existing offer using a payment account with a matching payment method.
+
+OPTIONS
+-------
+--offer-id
+		The id of the buy or sell offer to take.
+
+--payment-account-id
+		The id of the payment account used to send or receive funds during the trade.
+		The payment account's payment method must match that of the offer.
+
+--amount
+		The optional amount of XMR to take from a range offer.  The default is the
+		full offer amount.
+
+--challenge
+		The optional passphrase required to take a private offer.
+
+EXAMPLES
+--------
+Take an offer:
+$ ./haveno-cli --password=xyz --port=9998 takeoffer --offer-id=<offer-id> --payment-account-id=<payment-account-id>
+
+Take 0.25 XMR of a range offer:
+$ ./haveno-cli --password=xyz --port=9998 takeoffer --offer-id=<offer-id> --payment-account-id=<payment-account-id> --amount=0.25

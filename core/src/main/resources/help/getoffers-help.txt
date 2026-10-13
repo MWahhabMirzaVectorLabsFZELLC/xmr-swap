@@ -1,0 +1,28 @@
+getoffers
+
+NAME
+----
+getoffers - get available offers
+
+SYNOPSIS
+--------
+getoffers
+		--direction=<value>
+		--currency-code=<value>
+
+DESCRIPTION
+-----------
+Returns available offers with the given direction and currency-code, excluding your own.
+
+OPTIONS
+-------
+--direction
+		The offer direction (buy|sell).
+
+--currency-code
+		The three letter code of the currency traded for XMR, e.g., EUR, USD, BCH, ...
+
+EXAMPLES
+--------
+Get available offers to buy XMR for EUR:
+$ ./haveno-cli --password=xyz --port=9998 getoffers --direction=buy --currency-code=eur

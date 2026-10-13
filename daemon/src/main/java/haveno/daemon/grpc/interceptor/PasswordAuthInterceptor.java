@@ -1,0 +1,94 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.daemon.grpc.interceptor;
+
+import com.google.inject.Inject;
+import haveno.common.config.Config;
+import io.grpc.Metadata;
+import static io.grpc.Metadata.ASCII_STRING_MARSHALLER;
+import static io.grpc.Metadata.Key;
+import io.grpc.ServerCall;
+import io.grpc.ServerCallHandler;
+import io.grpc.ServerInterceptor;
+import static io.grpc.Status.RESOURCE_EXHAUSTED;
+import static io.grpc.Status.UNAUTHENTICATED;
+import io.grpc.StatusRuntimeException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.concurrent.TimeUnit;
+import static java.lang.String.format;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+/**
+ * Authorizes rpc server calls by comparing the value of the caller's
+ * {@value PASSWORD_KEY} header to an expected value set at server startup time.
+ *
+ * @see haveno.common.config.Config#apiPassword
+ */
+public class PasswordAuthInterceptor implements ServerInterceptor {
+
+    private static final String PASSWORD_KEY = "password";
+
+    private final byte[] expectedPasswordDigest;
+    private final GrpcCallRateMeter failedAuthenticationRateMeter;
+
+    @Inject
+    public PasswordAuthInterceptor(Config config) {
+        this(config.apiPassword, new GrpcCallRateMeter(5, TimeUnit.MINUTES));
+    }
+
+    PasswordAuthInterceptor(String password, GrpcCallRateMeter failedAuthenticationRateMeter) {
+        this.expectedPasswordDigest = sha256(password);
+        this.failedAuthenticationRateMeter = failedAuthenticationRateMeter;
+    }
+
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> serverCall,
+                                                                 Metadata headers,
+                                                                 ServerCallHandler<ReqT, RespT> serverCallHandler) {
+        synchronized (failedAuthenticationRateMeter) {
+            // check before comparing passwords so concurrent guesses cannot bypass the limit
+            if (failedAuthenticationRateMeter.getCallsCount() >= failedAuthenticationRateMeter.getAllowedCallsPerTimeWindow())
+                throw new StatusRuntimeException(RESOURCE_EXHAUSTED.withDescription("Too many authentication failures; retry in one minute"));
+
+            var actualPasswordValue = headers.get(Key.of(PASSWORD_KEY, ASCII_STRING_MARSHALLER));
+            if (actualPasswordValue == null) {
+                failedAuthenticationRateMeter.checkAndIncrement();
+                throw new StatusRuntimeException(UNAUTHENTICATED.withDescription(
+                        format("missing '%s' rpc header value", PASSWORD_KEY)));
+            }
+
+            // compare fixed-length digests so timing does not depend on the password
+            if (!MessageDigest.isEqual(sha256(actualPasswordValue), expectedPasswordDigest)) {
+                failedAuthenticationRateMeter.checkAndIncrement();
+                throw new StatusRuntimeException(UNAUTHENTICATED.withDescription(
+                        format("incorrect '%s' rpc header value", PASSWORD_KEY)));
+            }
+        }
+
+        return serverCallHandler.startCall(serverCall, headers);
+    }
+
+    private static byte[] sha256(String value) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(value.getBytes(UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}

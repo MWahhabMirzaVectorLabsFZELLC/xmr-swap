@@ -1,0 +1,1329 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.main.portfolio.pendingtrades;
+
+import com.google.inject.Inject;
+import com.google.inject.name.Named;
+import com.jfoenix.controls.JFXBadge;
+import com.jfoenix.controls.JFXButton;
+import de.jensd.fx.glyphs.materialdesignicons.MaterialDesignIcon;
+import haveno.common.UserThread;
+import haveno.common.config.Config;
+import haveno.common.crypto.KeyRing;
+import haveno.common.util.Utilities;
+import haveno.core.alert.PrivateNotificationManager;
+import haveno.core.locale.GlobalSettings;
+import haveno.core.locale.Res;
+import haveno.core.offer.OfferPayload;
+import haveno.core.support.dispute.mediation.MediationResultState;
+import haveno.core.support.messages.ChatMessage;
+import haveno.core.support.traderchat.TradeChatSession;
+import haveno.core.support.traderchat.TraderChatManager;
+import haveno.core.trade.Contract;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.trade.Trade;
+import haveno.core.user.Preferences;
+import haveno.core.util.FormattingUtils;
+import haveno.core.util.VolumeUtil;
+import haveno.core.util.coin.CoinFormatter;
+import haveno.desktop.Navigation;
+import haveno.desktop.common.view.ActivatableViewAndModel;
+import haveno.desktop.common.view.FxmlView;
+import haveno.desktop.components.AutoTooltipLabel;
+import haveno.desktop.components.ButtonBadge;
+import haveno.desktop.components.HyperlinkWithIcon;
+import haveno.desktop.components.PeerInfoIconTrading;
+import haveno.desktop.components.list.FilterBox;
+import haveno.desktop.main.MainView;
+import haveno.desktop.main.overlays.notifications.NotificationCenter;
+import haveno.desktop.main.overlays.popups.Popup;
+import haveno.desktop.main.overlays.windows.TradeDetailsWindow;
+import haveno.desktop.main.portfolio.presentation.PortfolioUtil;
+import haveno.desktop.main.shared.ChatView;
+import haveno.desktop.util.Accessibility;
+import haveno.desktop.util.DisplayUtils;
+import haveno.desktop.util.FormBuilder;
+import haveno.desktop.util.GUIUtil;
+import haveno.network.p2p.NodeAddress;
+import java.text.DateFormat;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.BooleanBinding;
+import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.beans.value.ChangeListener;
+import javafx.collections.ListChangeListener;
+import javafx.collections.ObservableList;
+import javafx.collections.transformation.FilteredList;
+import javafx.collections.transformation.SortedList;
+import javafx.css.PseudoClass;
+import javafx.event.EventHandler;
+import javafx.fxml.FXML;
+import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.Scene;
+import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBase;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.Label;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.ScrollBar;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.TableCell;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
+import javafx.scene.control.TableView;
+import javafx.scene.control.Tooltip;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
+import javafx.scene.layout.AnchorPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+import javafx.scene.shape.Circle;
+import javafx.scene.text.Text;
+import javafx.stage.Modality;
+import javafx.stage.Stage;
+import javafx.stage.StageStyle;
+import javafx.util.Callback;
+import org.fxmisc.easybind.EasyBind;
+import org.fxmisc.easybind.Subscription;
+
+@FxmlView
+public class PendingTradesView extends ActivatableViewAndModel<VBox, PendingTradesViewModel> {
+    private static final double TABLE_ROW_HEIGHT = 40;
+    private static final double TRADE_ID_COLUMN_MIN_WIDTH = 85;
+    private static final int MAX_VISIBLE_ROWS = 4;
+
+    public interface ChatCallback {
+        void onOpenChat(Trade trade);
+    }
+
+    private final TradeDetailsWindow tradeDetailsWindow;
+    private final Navigation navigation;
+    private final KeyRing keyRing;
+    private final CoinFormatter formatter;
+    private final PrivateNotificationManager privateNotificationManager;
+    private final boolean useDevPrivilegeKeys;
+    private final boolean useDevModeHeader;
+    private final Preferences preferences;
+    @FXML
+    FilterBox filterBox;
+    @FXML
+    TableView<PendingTradesListItem> tableView;
+    @FXML
+    TableColumn<PendingTradesListItem, PendingTradesListItem> priceColumn, volumeColumn, amountColumn, avatarColumn,
+            marketColumn, roleColumn, paymentMethodColumn, tradeIdColumn, dateColumn, chatColumn, moveTradeToFailedColumn;
+    @FXML
+    TableColumn<PendingTradesListItem, PendingTradesListItem.TradeStatus> statusColumn;
+    @FXML
+    ScrollPane scrollView;
+    @FXML
+    ScrollPane tableScrollPane;
+    private FilteredList<PendingTradesListItem> filteredList;
+    private SortedList<PendingTradesListItem> sortedList;
+    private TradeSubView selectedSubView;
+    private EventHandler<KeyEvent> keyEventEventHandler;
+    private Scene scene;
+    private Subscription selectedTableItemSubscription;
+    private Subscription selectedItemSubscription;
+    private Stage chatPopupStage;
+    private final NotificationCenter notificationCenter;
+    private ListChangeListener<PendingTradesListItem> tradesListChangeListener;
+    private final Map<String, Long> newChatMessagesByTradeMap = new HashMap<>();
+    private String tradeIdOfOpenChat;
+    private long tradeSelectionRequest;
+    private Trade tradeToSelect;
+    private boolean openChatOnSelection;
+    private boolean active;
+    private boolean tradeIdColumnWidthUpdatePending;
+
+    private final Map<String, Button> buttonByTrade = new HashMap<>();
+    private final Map<String, JFXBadge> badgeByTrade = new HashMap<>();
+    private final Map<String, ListChangeListener<ChatMessage>> listenerByTrade = new HashMap<>();
+    private ChangeListener<Trade.DisputeState> disputeStateListener;
+    private ChangeListener<MediationResultState> mediationResultStateListener;
+    private ChangeListener<Number> getMempoolStatusListener;
+    private final Set<Trade> observedTrades = new HashSet<>();
+    private final ChangeListener<Object> tradeWarningListener = (observable, oldValue, newValue) ->
+            updateMoveTradeToFailedColumnState();
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor, Initialisation
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Inject
+    public PendingTradesView(PendingTradesViewModel model,
+                             TradeDetailsWindow tradeDetailsWindow,
+                             Navigation navigation,
+                             NotificationCenter notificationCenter,
+                             KeyRing keyRing,
+                             @Named(FormattingUtils.BTC_FORMATTER_KEY) CoinFormatter formatter,
+                             PrivateNotificationManager privateNotificationManager,
+                             Preferences preferences,
+                             @Named(Config.USE_DEV_PRIVILEGE_KEYS) boolean useDevPrivilegeKeys,
+                             @Named(Config.USE_DEV_MODE_HEADER) boolean useDevModeHeader) {
+        super(model);
+        this.tradeDetailsWindow = tradeDetailsWindow;
+        this.navigation = navigation;
+        this.notificationCenter = notificationCenter;
+        this.keyRing = keyRing;
+        this.formatter = formatter;
+        this.privateNotificationManager = privateNotificationManager;
+        this.preferences = preferences;
+        this.useDevPrivilegeKeys = useDevPrivilegeKeys;
+        this.useDevModeHeader = useDevModeHeader;
+    }
+
+    @Override
+    public void initialize() {
+        root.getStylesheets().add(PendingTradesView.class.getResource("trade-view.css").toExternalForm());
+        tableView.getStyleClass().add("pending-trades-table");
+        filterBox.setInputFillWidth(0);
+        GUIUtil.setFixedColumnWidth(tradeIdColumn, TRADE_ID_COLUMN_MIN_WIDTH);
+        GUIUtil.applyTableStyle(tableView);
+
+        priceColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.price")));
+        amountColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.amountWithCur", Res.getBaseCurrencyCode())));
+        volumeColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.amount")));
+        marketColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.market")));
+        roleColumn.setGraphic(new AutoTooltipLabel(Res.get("portfolio.pending.role")));
+        statusColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.state")));
+        dateColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.dateTime")));
+        tradeIdColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.tradeId")));
+        paymentMethodColumn.setGraphic(new AutoTooltipLabel(Res.get("shared.paymentMethod")));
+        avatarColumn.setText("");
+        chatColumn.setText("");
+        moveTradeToFailedColumn.setText("");
+
+        setTradeIdColumnCellFactory();
+        setDateColumnCellFactory();
+        setAmountColumnCellFactory();
+        setPriceColumnCellFactory();
+        setVolumeColumnCellFactory();
+        setPaymentMethodColumnCellFactory();
+        setMarketColumnCellFactory();
+        setRoleColumnCellFactory();
+        setStatusColumnCellFactory();
+        setAvatarColumnCellFactory();
+        setChatColumnCellFactory();
+        setRemoveTradeColumnCellFactory();
+
+        tableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+        tableView.setPlaceholder(new AutoTooltipLabel(Res.get("table.placeholder.noItems", Res.get("shared.openTrades"))));
+        tableView.setFixedCellSize(TABLE_ROW_HEIGHT);
+        GUIUtil.applyTableHorizontalScroll(tableScrollPane, tableView);
+
+        // an empty detail pane still claims its default height, so keep it out of the layout
+        scrollView.visibleProperty().bind(scrollView.contentProperty().isNotNull());
+        scrollView.managedProperty().bind(scrollView.visibleProperty());
+        configureTradeNavigation();
+
+        tradeIdColumn.setComparator(Comparator.comparing(o -> o.getTrade().getId()));
+        dateColumn.setComparator(Comparator.comparing(o -> o.getTrade().getDate()));
+        volumeColumn.setComparator(Comparator.comparing(o -> o.getTrade().getVolume(), Comparator.nullsFirst(Comparator.naturalOrder())));
+        amountColumn.setComparator(Comparator.comparing(o -> o.getTrade().getAmount(), Comparator.nullsFirst(Comparator.naturalOrder())));
+        priceColumn.setComparator(Comparator.comparing(PendingTradesListItem::getPrice));
+        paymentMethodColumn.setComparator(Comparator.comparing(
+                item -> item.getTrade().getOffer() != null ?
+                        Res.get(item.getTrade().getOffer().getPaymentMethod().getId()) :
+                        null,
+                Comparator.nullsFirst(Comparator.naturalOrder())));
+
+        marketColumn.setComparator(Comparator.comparing(PendingTradesListItem::getMarketDescription));
+        roleColumn.setComparator(Comparator.comparing((PendingTradesListItem item) -> item.getTrade().isArbitrator())
+                .thenComparing(item -> !item.getTrade().isBuyer())
+                .thenComparing(item -> !item.getTrade().isMaker()));
+        avatarColumn.setComparator(Comparator.comparing(
+                o -> model.getNumPastTrades(o.getTrade()),
+                Comparator.nullsFirst(Comparator.naturalOrder())
+        ));
+        dateColumn.setSortType(TableColumn.SortType.DESCENDING);
+        tableView.getSortOrder().add(dateColumn);
+
+        tableView.setRowFactory(
+                tableView -> {
+                    final TableRow<PendingTradesListItem> row = new TableRow<>();
+                    final ContextMenu rowMenu = new ContextMenu();
+                    MenuItem duplicateItem = new MenuItem(Res.get("portfolio.context.offerLikeThis"));
+                    duplicateItem.setOnAction((event) -> {
+                        try {
+                            OfferPayload offerPayload = row.getItem().getTrade().getOffer().getOfferPayload();
+                            if (offerPayload.getPubKeyRing().equals(keyRing.getPubKeyRing())) {
+                                PortfolioUtil.duplicateOffer(navigation, offerPayload);
+                            } else {
+                                new Popup().warning(Res.get("portfolio.context.notYourOffer")).show();
+                            }
+                        } catch (NullPointerException e) {
+                            log.warn("Unable to get offerPayload - {}", e.toString());
+                        }
+                    });
+                    MenuItem moveToFailedItem = new MenuItem(Res.get("portfolio.pending.failedTrade.moveTradeToFailedIcon.tooltip"));
+                    moveToFailedItem.setOnAction((event) -> {
+                        if (isMaybeInvalidTrade(row.getItem().getTrade())) {
+                            onMoveInvalidTradeToFailedTrades(row.getItem().getTrade());
+                        } else {
+                            model.dataModel.tradeManager.onMoveInvalidTradeToFailedTrades(row.getItem().getTrade());
+                        }
+                    });
+                    rowMenu.getItems().addAll(duplicateItem, moveToFailedItem);
+                    row.contextMenuProperty().bind(
+                            Bindings.when(Bindings.isNotNull(row.itemProperty()))
+                                    .then(rowMenu)
+                                    .otherwise((ContextMenu) null));
+                    return row;
+                });
+
+        // we use a hidden emergency shortcut to open support ticket
+        keyEventEventHandler = keyEvent -> {
+            if (Utilities.isAltOrCtrlPressed(KeyCode.O, keyEvent)) {
+                Popup popup = new Popup();
+                popup.headLine(Res.get("portfolio.pending.openSupportTicket.headline"))
+                        .message(Res.get("portfolio.pending.openSupportTicket.msg"))
+                        .actionButtonText(Res.get("portfolio.pending.openSupportTicket.headline"))
+                        .onAction(model.dataModel::onOpenSupportTicket)
+                        .closeButtonText(Res.get("shared.cancel"))
+                        .onClose(popup::hide)
+                        .show();
+            }
+        };
+
+        tradesListChangeListener = c -> {
+            boolean itemsChanged = false;
+            while (c.next()) {
+                if (c.wasUpdated()) {
+                    PendingTradesListItem selectedItem = tableView.getSelectionModel().getSelectedItem();
+                    if (selectedItem != null && filteredList.getPredicate() != null && !filteredList.getPredicate().test(selectedItem)) {
+                        // keep the details on this trade when its status no longer matches the filter
+                        tableView.getSelectionModel().clearSelection();
+                    }
+                } else {
+                    itemsChanged = true;
+                }
+            }
+            if (itemsChanged) onListChanged();
+        };
+
+        getMempoolStatusListener = (observable, oldValue, newValue) -> {
+            // -1 status is unknown
+            // 0 status is FAIL
+            // 1 status is PASS
+            if (newValue.longValue() >= 0) {
+                log.info("Taker fee validation returned {}", newValue.longValue());
+            }
+        };
+    }
+
+    public Region getHeaderControls() {
+        return filterBox;
+    }
+
+    @Override
+    protected void activate() {
+        active = true;
+        ObservableList<PendingTradesListItem> list = model.dataModel.list;
+        // clear a filtered-out selection before the table can select a neighboring trade
+        list.addListener(tradesListChangeListener);
+        filteredList = new FilteredList<>(list);
+        sortedList = new SortedList<>(filteredList);
+        sortedList.comparatorProperty().bind(tableView.comparatorProperty());
+        tableView.setItems(sortedList);
+
+        configureTableHeight();
+
+        filterBox.initialize(filteredList, tableView); // here because filteredList is instantiated here
+        filterBox.setPromptText(Res.get("shared.filter"));
+        filterBox.activate();
+
+        updateMoveTradeToFailedColumnState();
+
+        scene = root.getScene();
+        if (scene != null) {
+            scene.addEventHandler(KeyEvent.KEY_RELEASED, keyEventEventHandler);
+        }
+
+        selectedItemSubscription = EasyBind.subscribe(model.dataModel.selectedItemProperty, selectedItem -> {
+            notificationCenter.setViewedTradeId(null);
+            if (selectedItem != null) {
+                if (selectedSubView != null)
+                    selectedSubView.deactivate();
+
+                if (selectedItem.getTrade() != null) {
+                    selectedSubView = model.dataModel.tradeManager.isBuyer(model.dataModel.getOffer()) ?
+                            new BuyerSubView(model) : new SellerSubView(model);
+
+                    //selectedSubView.setMinHeight(460);
+                    //VBox.setVgrow(selectedSubView, Priority.SOMETIMES);
+                    scrollView.setContent(selectedSubView);
+                    // create and register a callback so we can be notified when the subview
+                    // wants to open the chat window
+                    ChatCallback chatCallback = this::openChat;
+                    selectedSubView.setChatCallback(chatCallback);
+                    // focus the table on close so arrow keys advance to the next trade
+                    selectedSubView.setCloseCallback(tableView::requestFocus);
+                }
+
+                updateTableSelection();
+            } else {
+                removeSelectedSubView();
+            }
+
+            model.onSelectedItemChanged(selectedItem);
+
+            if (selectedSubView != null && selectedItem != null) {
+                selectedSubView.activate();
+                selectedSubView.setFocusedChatTradeId(chatPopupStage != null && chatPopupStage.isFocused() ? tradeIdOfOpenChat : null);
+            }
+            // wait for a notification's target selection and its trade details to settle
+            UserThread.execute(() -> UserThread.execute(() -> {
+                PendingTradesListItem tableItem = tableView.getSelectionModel().getSelectedItem();
+                // the details remain visible when a list rebuild clears the table selection
+                if (active && root.getScene() != null && Objects.equals(selectedItem, model.dataModel.selectedItemProperty.get()) &&
+                        (tableItem == null || Objects.equals(selectedItem, tableItem))) {
+                    notificationCenter.setViewedTradeId(selectedItem == null ? null : selectedItem.getTrade().getId());
+                }
+            }));
+        });
+
+        selectedTableItemSubscription = EasyBind.subscribe(tableView.getSelectionModel().selectedItemProperty(),
+                selectedItem -> {
+                    if (selectedItem != null && !selectedItem.equals(model.dataModel.selectedItemProperty.get())) {
+                        if (selectedSubView != null) selectedSubView.deactivate();
+                        model.dataModel.onSelectItem(selectedItem);
+                    }
+                });
+
+        updateTableSelection();
+
+        updateNewChatMessagesByTradeMap();
+        model.getMempoolStatus().addListener(getMempoolStatusListener);
+        selectRequestedTrade();
+    }
+
+    private void configureTableHeight() {
+        // fit the header plus whole rows up to a cap so rows are never partially clipped;
+        // 2px slack keeps the VirtualFlow from showing a scrollbar at an exact fit
+        tableScrollPane.prefHeightProperty().bind(Bindings.createDoubleBinding(
+                () -> getTableHeaderHeight() + TABLE_ROW_HEIGHT * Math.min(Math.max(tableView.getItems().size(), 1), MAX_VISIBLE_ROWS) + 2
+                        + getTableHbarHeight(),
+                tableView.getItems(), tableView.widthProperty(), tableScrollPane.viewportBoundsProperty()));
+        tableScrollPane.minHeightProperty().bind(tableScrollPane.prefHeightProperty());
+        // with no trades there is no detail view to make room for, so fill the height like the sibling tabs
+        tableScrollPane.maxHeightProperty().bind(Bindings.when(Bindings.isEmpty(tableView.getItems()))
+                .then(Double.MAX_VALUE).otherwise(tableScrollPane.prefHeightProperty()));
+    }
+
+    // measured once the skin exists (width dependency triggers re-evaluation after first layout)
+    private double getTableHeaderHeight() {
+        Node header = tableView.lookup(".column-header-background");
+        return header == null ? TABLE_ROW_HEIGHT : header.prefHeight(-1);
+    }
+
+    // headroom for the scroll pane's horizontal bar so it never eats into the fitted rows
+    private double getTableHbarHeight() {
+        for (Node node : tableScrollPane.getChildrenUnmodifiable()) {
+            if (node instanceof ScrollBar bar && bar.getOrientation() == Orientation.HORIZONTAL) {
+                return bar.isVisible() ? bar.getHeight() : 0;
+            }
+        }
+        return 0;
+    }
+
+    @Override
+    protected void deactivate() {
+        active = false;
+        tradeSelectionRequest++;
+        tradeToSelect = null;
+        notificationCenter.setViewedTradeId(null);
+        filterBox.deactivate();
+        sortedList.comparatorProperty().unbind();
+        selectedItemSubscription.unsubscribe();
+        selectedTableItemSubscription.unsubscribe();
+
+        removeSelectedSubView();
+
+        model.dataModel.list.removeListener(tradesListChangeListener);
+        model.getMempoolStatus().removeListener(getMempoolStatusListener);
+        observedTrades.forEach(trade -> {
+            trade.stateProperty().removeListener(tradeWarningListener);
+            trade.errorMessageProperty().removeListener(tradeWarningListener);
+        });
+        observedTrades.clear();
+
+        if (scene != null)
+            scene.removeEventHandler(KeyEvent.KEY_RELEASED, keyEventEventHandler);
+    }
+
+    private void configureTradeNavigation() {
+        Runnable scrollToTop = () -> scrollView.setVvalue(scrollView.getVmin());
+        scrollView.contentProperty().addListener((observable, oldContent, newContent) -> {
+            if (oldContent instanceof TradeSubView oldView) oldView.setStepChangedCallback(null);
+            if (newContent instanceof TradeSubView newView) newView.setStepChangedCallback(scrollToTop);
+            scrollToTop.run();
+        });
+        tableView.addEventHandler(MouseEvent.MOUSE_CLICKED, event -> {
+            if (event.getButton() != MouseButton.PRIMARY || !(event.getTarget() instanceof Node target)) return;
+            for (Node node = target; node != null && node != tableView; node = node.getParent()) {
+                // row actions keep their own navigation behavior
+                if (node instanceof ButtonBase || node instanceof PeerInfoIconTrading) return;
+                if (node instanceof TableRow<?> row) {
+                    if (!row.isEmpty() && row.isSelected()) {
+                        scrollToTop.run();
+                        if (event.getClickCount() == 2 && row.getItem() instanceof PendingTradesListItem item) {
+                            tradeDetailsWindow.show(item.getTrade());
+                            event.consume();
+                        }
+                    }
+                    return;
+                }
+            }
+        });
+    }
+
+    private void removeSelectedSubView() {
+        if (selectedSubView != null) {
+            selectedSubView.deactivate();
+            scrollView.setContent(null);
+            selectedSubView = null;
+        }
+    }
+
+    private void updateMoveTradeToFailedColumnState() {
+        UserThread.execute(() -> {
+            if (!active) return;
+            synchronized (model.dataModel.list) {
+                Set<Trade> trades = model.dataModel.list.stream().map(PendingTradesListItem::getTrade).collect(Collectors.toSet());
+                observedTrades.removeIf(trade -> {
+                    if (trades.contains(trade)) return false;
+                    trade.stateProperty().removeListener(tradeWarningListener);
+                    trade.errorMessageProperty().removeListener(tradeWarningListener);
+                    return true;
+                });
+                for (Trade trade : trades) {
+                    if (observedTrades.add(trade)) {
+                        trade.stateProperty().addListener(tradeWarningListener);
+                        trade.errorMessageProperty().addListener(tradeWarningListener);
+                    }
+                }
+                moveTradeToFailedColumn.setVisible(trades.stream().anyMatch(this::isMaybeInvalidTrade));
+            }
+            updateTradeIdColumnWidth();
+        });
+    }
+
+    private boolean isMaybeInvalidTrade(Trade trade) {
+        return trade.hasErrorMessage() ||
+                (Trade.Phase.DEPOSITS_PUBLISHED.ordinal() <= trade.getPhase().ordinal() && trade.isTxChainInvalid());
+    }
+
+    private void onMoveInvalidTradeToFailedTrades(Trade trade) {
+        String msg = trade.isTxChainInvalid() ?
+                Res.get("portfolio.pending.failedTrade.txChainInvalid.moveToFailed",
+                        getInvalidTradeDetails(trade)) :
+                Res.get("portfolio.pending.failedTrade.txChainValid.moveToFailed",
+                        getInvalidTradeDetails(trade));
+        new Popup().width(900).attention(msg)
+                .onAction(() -> {
+                    model.dataModel.onMoveInvalidTradeToFailedTrades(trade);
+                    updateMoveTradeToFailedColumnState();
+                })
+                .actionButtonText(Res.get("shared.yes"))
+                .closeButtonText(Res.get("shared.no"))
+                .show();
+    }
+
+    private void onShowInfoForInvalidTrade(Trade trade) {
+        new Popup().width(900).attention(Res.get("portfolio.pending.failedTrade.info.popup",
+                getInvalidTradeDetails(trade)))
+                .show();
+    }
+
+    private String getInvalidTradeDetails(Trade trade) {
+        Contract contract = trade.getContract();
+        if (contract == null) {
+            return Res.get("portfolio.pending.failedTrade.missingContract");
+        }
+
+        if (trade.getMakerDepositTx() == null) {
+            return Res.get("portfolio.pending.failedTrade.missingDepositTx");
+        }
+
+        if (trade.getTakerDepositTx() == null && !trade.hasBuyerAsTakerWithoutDeposit()) {
+          return Res.get("portfolio.pending.failedTrade.missingDepositTx"); // TODO (woodser): use .missingTakerDepositTx, .missingMakerDepositTx, update translation to 2-of-3 multisig
+        }
+
+        if (trade.hasErrorMessage()) {
+            return Res.get("portfolio.pending.failedTrade.errorMsgSet", trade.getErrorMessage());
+        }
+
+        return Res.get("shared.na");
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Chat
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    public record OpenChatRequest(Trade trade) {
+    }
+
+    private void updateNewChatMessagesByTradeMap() {
+        synchronized (model.dataModel.list) {
+            model.dataModel.list.forEach(t -> {
+                Trade trade = t.getTrade();
+                synchronized (trade.getChatMessages()) {
+                    newChatMessagesByTradeMap.put(trade.getId(),
+                            trade.getChatMessages().stream()
+                                    .filter(m -> !m.isWasDisplayed())
+                                    .filter(m -> !m.isSystemMessage())
+                                    .filter(m -> m.isSenderIsTrader() == trade.isMaker())
+                                    .count());
+                }
+            });
+        }
+    }
+
+    private void openChat(Trade trade) {
+        if (trade.isArbitrator()) throw new IllegalArgumentException("Arbitrators cannot use trader chat");
+        if (chatPopupStage != null && chatPopupStage.isShowing() && trade.getId().equals(tradeIdOfOpenChat)) {
+            chatPopupStage.setIconified(false);
+            chatPopupStage.toFront();
+            chatPopupStage.requestFocus();
+            return;
+        }
+        if (chatPopupStage != null)
+            chatPopupStage.close();
+
+        TraderChatManager traderChatManager = model.dataModel.getTraderChatManager();
+        if (trade.getChatMessages().isEmpty()) {
+            traderChatManager.addSystemMsg(trade);
+        }
+
+        tradeIdOfOpenChat = trade.getId();
+
+        ChatView chatView = new ChatView(traderChatManager, Res.get("offerbook.trader"));
+        chatView.setAllowAttachments(false);
+        chatView.setDisplayHeader(false);
+        chatView.initialize();
+
+        AnchorPane pane = new AnchorPane(chatView);
+        pane.setPrefSize(760, 500);
+        AnchorPane.setLeftAnchor(chatView, 0d);
+        AnchorPane.setRightAnchor(chatView, 0d);
+        AnchorPane.setTopAnchor(chatView, 0d);
+        AnchorPane.setBottomAnchor(chatView, 0d);
+
+        boolean isTaker = !model.dataModel.isMaker(trade.getOffer());
+        TradeChatSession tradeChatSession = new TradeChatSession(trade, isTaker);
+
+        disputeStateListener = (observable, oldValue, newValue) -> {
+            UserThread.execute(() -> {
+                if (trade.getId().equals(tradeIdOfOpenChat) &&
+                        (newValue == Trade.DisputeState.DISPUTE_CLOSED || newValue == Trade.DisputeState.REFUND_REQUEST_CLOSED)) {
+                    chatPopupStage.hide();
+                }
+            });
+        };
+        trade.disputeStateProperty().addListener(disputeStateListener);
+
+        mediationResultStateListener = (observable, oldValue, newValue) -> {
+            UserThread.execute(() -> {
+                if (trade.getId().equals(tradeIdOfOpenChat) && (newValue == MediationResultState.PAYOUT_TX_PUBLISHED ||
+                        newValue == MediationResultState.RECEIVED_PAYOUT_TX_PUBLISHED_MSG ||
+                        newValue == MediationResultState.PAYOUT_TX_SEEN_IN_NETWORK)) {
+                    chatPopupStage.hide();
+                }
+            });
+        };
+        trade.mediationResultStateProperty().addListener(mediationResultStateListener);
+
+        chatView.display(tradeChatSession, pane.widthProperty());
+
+        chatView.activate();
+        chatView.scrollToBottom();
+
+        Stage stage = new Stage();
+        chatPopupStage = stage;
+        // the chat can outlive this view, so observe trade removal until the window closes
+        ObservableList<Trade> openTrades = model.dataModel.getTradeManager().getObservableList();
+        ListChangeListener<Trade> tradeListListener = change -> {
+            if (!change.getList().contains(trade)) UserThread.execute(stage::hide);
+        };
+        openTrades.addListener(tradeListListener);
+        ChangeListener<Boolean> chatFocusListener = (observable, oldValue, focused) -> {
+            notificationCenter.onChatFocusChanged(trade.getChatMessages(), focused, traderChatManager::requestPersistence);
+            updateChatMessageCount(trade, badgeByTrade.get(trade.getId()));
+            if (selectedSubView != null) selectedSubView.setFocusedChatTradeId(focused ? trade.getId() : null);
+        };
+        chatPopupStage.focusedProperty().addListener(chatFocusListener);
+        model.getChatOpen().bind(chatPopupStage.showingProperty());
+        chatPopupStage.setTitle(Res.get("tradeChat.chatWindowTitle", trade.getShortId()));
+        Scene rootScene = MainView.getRootContainer().getScene();
+
+        // keep a top-level window so the WM shows maximize/fullscreen
+        chatPopupStage.initModality(Modality.NONE);
+        chatPopupStage.initStyle(StageStyle.DECORATED);
+        chatPopupStage.setOnHiding(event -> {
+            openTrades.removeListener(tradeListListener);
+            chatView.deactivate();
+            chatPopupStage.focusedProperty().removeListener(chatFocusListener);
+            notificationCenter.onChatFocusChanged(trade.getChatMessages(), false, traderChatManager::requestPersistence);
+            updateChatMessageCount(trade, badgeByTrade.get(trade.getId()));
+            tradeIdOfOpenChat = null;
+            if (selectedSubView != null) selectedSubView.setFocusedChatTradeId(null);
+
+            trade.disputeStateProperty().removeListener(disputeStateListener);
+            trade.mediationResultStateProperty().removeListener(mediationResultStateListener);
+
+            traderChatManager.requestPersistence();
+        });
+
+        Scene scene = new Scene(pane);
+        scene.addEventHandler(KeyEvent.KEY_RELEASED, ev -> {
+            if (ev.getCode() == KeyCode.ESCAPE || Utilities.isCtrlPressed(KeyCode.W, ev)) {
+                ev.consume();
+                chatPopupStage.hide();
+            }
+        });
+        chatPopupStage.setScene(scene);
+        GUIUtil.loadWindowStyles(chatPopupStage, preferences, useDevModeHeader);
+
+        GUIUtil.showCenteredChatWindow(chatPopupStage, rootScene);
+        updateChatMessageCount(trade, badgeByTrade.get(trade.getId()));
+    }
+
+    private void updateChatMessageCount(Trade trade, JFXBadge badge) {
+        if (badge == null) return;
+        UserThread.execute(() -> {
+            long num = 0;
+            if (!notificationCenter.isChatFocused(trade.getChatMessages())) {
+                updateNewChatMessagesByTradeMap();
+                num = newChatMessagesByTradeMap.get(trade.getId());
+            }
+            badge.setText(num > 0 ? DisplayUtils.formatBadgeCount(num) : "");
+            badge.setEnabled(num > 0);
+            badge.refreshBadge();
+            Button button = (Button) badge.getControl();
+            String description = num > 0 ? Res.get(num == 1 ? "tradeChat.openChatWithUnreadMessage" :
+                    "tradeChat.openChatWithUnreadMessages", num) : Res.get("tradeChat.openChat");
+            button.getTooltip().setText(description);
+            Accessibility.setName(button, description);
+        });
+    }
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Private
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void updateTableSelection() {
+        // resolve the current selection after queued updates so an older row cannot replace the notification target
+        UserThread.execute(() -> {
+            PendingTradesListItem selectedItemFromModel = model.dataModel.selectedItemProperty.get();
+            if (selectedItemFromModel != null) {
+                tableView.getSelectionModel().select(tableView.getItems().indexOf(selectedItemFromModel));
+            }
+        });
+    }
+
+    public void selectTrade(Trade trade) {
+        selectTrade(trade, false);
+    }
+
+    public void selectTrade(Trade trade, boolean openChat) {
+        tradeSelectionRequest++;
+        tradeToSelect = trade;
+        openChatOnSelection = openChat;
+        selectRequestedTrade();
+    }
+
+    private void selectRequestedTrade() {
+        // a tab's first activation can wait for its skin, so retain the target until the model refresh is queued
+        if (!active || tradeToSelect == null) return;
+        Trade trade = tradeToSelect;
+        boolean openChat = openChatOnSelection;
+        long request = tradeSelectionRequest;
+        tradeToSelect = null;
+        filterBox.clear();
+        UserThread.execute(() -> {
+            if (!active || request != tradeSelectionRequest) return;
+            tableView.getItems().stream()
+                    .filter(item -> item.getTrade().getId().equals(trade.getId()))
+                    .findFirst().ifPresent(item -> {
+                        tableView.getSelectionModel().select(item);
+                        tableView.scrollTo(item);
+                        if (openChat) {
+                            // let the queued model and table selection updates settle before opening the target chat
+                            UserThread.execute(() -> UserThread.execute(() -> {
+                                PendingTradesListItem tableItem = tableView.getSelectionModel().getSelectedItem();
+                                // a list rebuild can clear the table selection while the same trade details remain visible
+                                if (active && request == tradeSelectionRequest && root.getScene() != null &&
+                                        tableView.getItems().contains(item) && (tableItem == null || item.equals(tableItem)) &&
+                                        item.equals(model.dataModel.selectedItemProperty.get())) openChat(item.getTrade());
+                            }));
+                        }
+                    });
+        });
+    }
+
+    private void onListChanged() {
+        updateNewChatMessagesByTradeMap();
+        updateMoveTradeToFailedColumnState();
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // CellFactories
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    private void setTradeIdColumnCellFactory() {
+        tradeIdColumn.setCellValueFactory((pendingTradesListItem) -> new ReadOnlyObjectWrapper<>(pendingTradesListItem.getValue()));
+        tradeIdColumn.setCellFactory(
+                new Callback<>() {
+
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(TableColumn<PendingTradesListItem,
+                            PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            private Trade trade;
+                            private ChangeListener<Object> listener;
+                            private BooleanBinding unseenUpdate;
+                            private final Circle dot = new Circle(3);
+
+                            {
+                                dot.getStyleClass().add("trade-update-dot");
+                                Tooltip.install(dot, new Tooltip(Res.get("notification.trade.unseenUpdate")));
+                            }
+
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+
+                                if (trade != null && listener != null) {
+                                    trade.stateProperty().removeListener(listener);
+                                    trade.errorMessageProperty().removeListener(listener);
+                                }
+                                dot.visibleProperty().unbind();
+                                accessibleHelpProperty().unbind();
+                                setAccessibleHelp(null);
+                                if (unseenUpdate != null) unseenUpdate.dispose();
+                                trade = null;
+                                listener = null;
+                                unseenUpdate = null;
+                                if (item != null && !empty) {
+                                    trade = item.getTrade();
+                                    unseenUpdate = notificationCenter.unseenTradeUpdateProperty(trade.getId());
+                                    dot.visibleProperty().bind(unseenUpdate);
+                                    accessibleHelpProperty().bind(Bindings.when(unseenUpdate)
+                                            .then(Res.get("notification.trade.unseenUpdate")).otherwise(""));
+                                    listener = (observable, oldValue, newValue) -> UserThread.execute(() -> update());
+                                    trade.stateProperty().addListener(listener);
+                                    trade.errorMessageProperty().addListener(listener);
+                                    update();
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+
+                            private void update() {
+                                if (trade == null) return;
+                                setGraphic(createTradeIdContent(trade, dot));
+                            }
+                        };
+                    }
+                });
+    }
+
+    private HBox createTradeIdContent(Trade trade, Circle dot) {
+        HyperlinkWithIcon field;
+
+        if (isMaybeInvalidTrade(trade)) {
+            field = new HyperlinkWithIcon(trade.getShortId());
+            field.setIcon(FormBuilder.getMediumSizeIcon(MaterialDesignIcon.ALERT_CIRCLE_OUTLINE));
+            field.setOnAction(event -> tradeDetailsWindow.show(trade));
+            field.setTooltip(new Tooltip(Res.get("tooltip.invalidTradeState.warning")));
+            if (trade.isTxChainInvalid()) {
+                field.getIcon().getStyleClass().addAll("icon", "error-icon");
+            } else {
+                field.getIcon().getStyleClass().addAll("icon", "warn-icon");
+            }
+        } else {
+            field = new HyperlinkWithIcon(trade.getShortId());
+            field.hideIcon();
+            field.setOnAction(event -> tradeDetailsWindow.show(trade));
+            field.setTooltip(new Tooltip(Res.get("tooltip.openPopupForDetails")));
+        }
+        Accessibility.setName(field, Accessibility.spellOut(trade.getShortId()));
+        HBox content = new HBox(6, field, dot);
+        content.setAlignment(Pos.CENTER_LEFT);
+        content.setPadding(new Insets(0, 8, 0, 0));
+        return content;
+    }
+
+    private void updateTradeIdColumnWidth() {
+        if (tradeIdColumnWidthUpdatePending) return;
+        tradeIdColumnWidthUpdatePending = true;
+        UserThread.execute(() -> {
+            tradeIdColumnWidthUpdatePending = false;
+            if (!active || root.getScene() == null) return;
+
+            // measure all current trades with the same css as real cells, including rows outside the viewport
+            VBox content = new VBox();
+            for (Trade trade : observedTrades) {
+                Circle dot = new Circle(3);
+                dot.getStyleClass().add("trade-update-dot");
+                content.getChildren().add(createTradeIdContent(trade, dot));
+            }
+            TableCell<PendingTradesListItem, PendingTradesListItem> cell = new TableCell<>();
+            cell.setGraphic(content);
+            Pane row = new Pane(cell);
+            row.getStyleClass().add("table-row-cell");
+            row.pseudoClassStateChanged(PseudoClass.getPseudoClass("even"), true);
+            // measure the header independently of the table skin on first activation
+            Label headerLabel = new AutoTooltipLabel(((Label) tradeIdColumn.getGraphic()).getText());
+            Pane header = new Pane(new Label("", headerLabel));
+            header.getStyleClass().add("column-header");
+            Pane table = new Pane(row, header);
+            table.getStyleClass().add("table-view");
+            table.setManaged(false);
+            table.setVisible(false);
+            root.getChildren().add(table);
+            try {
+                table.applyCss();
+                double width = content.prefWidth(-1) + cell.snappedLeftInset() + cell.snappedRightInset();
+                // allow room for the header and sort arrow
+                width = Math.max(width, headerLabel.prefWidth(-1) + 20);
+                GUIUtil.setFixedColumnWidth(tradeIdColumn, Math.max(TRADE_ID_COLUMN_MIN_WIDTH, Math.ceil(width)));
+                // redistribute the remaining width even when the table itself has not resized
+                tableView.getColumnResizePolicy().call(new TableView.ResizeFeatures<>(tableView, null, 0.0));
+            } finally {
+                root.getChildren().remove(table);
+            }
+        });
+    }
+
+    private void setDateColumnCellFactory() {
+        dateColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        dateColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty) {
+                                    setGraphic(new AutoTooltipLabel(FormattingUtils.formatDateTime(item.getTrade().getDate(),
+                                            DateFormat.getDateInstance(DateFormat.DEFAULT, GlobalSettings.getLocale()),
+                                            DateFormat.getTimeInstance(DateFormat.SHORT, GlobalSettings.getLocale()))));
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setAmountColumnCellFactory() {
+        amountColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        amountColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty)
+                                    setGraphic(new AutoTooltipLabel(HavenoUtils.formatXmr(item.getTrade().getAmount())));
+                                else
+                                    setGraphic(null);
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setPriceColumnCellFactory() {
+        priceColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        priceColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty)
+                                    setGraphic(new AutoTooltipLabel(item.getPriceAsString()));
+                                else
+                                    setGraphic(null);
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setVolumeColumnCellFactory() {
+        volumeColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        volumeColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty) {
+                                    try {
+                                        String volume = VolumeUtil.formatVolumeWithCode(item.getTrade().getVolume());
+                                        setGraphic(new AutoTooltipLabel(volume));
+                                    } catch (Throwable ignore) {
+                                        log.debug(ignore.toString()); // Stupidity to make Codacy happy
+                                    }
+                                } else
+                                    setGraphic(null);
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setPaymentMethodColumnCellFactory() {
+        paymentMethodColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        paymentMethodColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty)
+                                    setGraphic(new AutoTooltipLabel(item.getPaymentMethod()));
+                                else
+                                    setGraphic(null);
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setMarketColumnCellFactory() {
+        marketColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        marketColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty) {
+                                    setGraphic(new AutoTooltipLabel(item.getMarketDescription()));
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setRoleColumnCellFactory() {
+        roleColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        roleColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(
+                            TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            @Override
+                            public void updateItem(final PendingTradesListItem item, boolean empty) {
+                                super.updateItem(item, empty);
+                                if (item != null && !empty) {
+                                    Trade trade = item.getTrade();
+                                    String description = model.getMyRole(item);
+                                    Label role = new AutoTooltipLabel(item.getRole());
+                                    HBox box = new HBox(8);
+                                    box.setAlignment(Pos.CENTER_LEFT);
+                                    if (!trade.isArbitrator()) {
+                                        Label direction = new Label(item.getDirection()
+                                                .toUpperCase(GlobalSettings.getLocale()));
+                                        direction.getStyleClass().addAll("trade-direction-badge", trade.isBuyer() ? "trade-direction-buy" : "trade-direction-sell");
+                                        direction.setMinWidth(Label.USE_PREF_SIZE);
+                                        box.getChildren().add(direction);
+                                    }
+                                    box.getChildren().add(role);
+                                    Tooltip.install(box, new Tooltip(description));
+                                    setAccessibleText(description);
+                                    setGraphic(box);
+                                } else {
+                                    setAccessibleText(null);
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+    }
+
+    private void setStatusColumnCellFactory() {
+        statusColumn.setCellValueFactory(trade -> trade.getValue().getTradeStatus());
+        statusColumn.setSortable(false);
+        statusColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            public void updateItem(PendingTradesListItem.TradeStatus status, boolean empty) {
+                super.updateItem(status, empty);
+                if (status != null && !empty) {
+                    Label label = new AutoTooltipLabel(Res.get(status.getResourceKey()));
+                    boolean problem = status == PendingTradesListItem.TradeStatus.IN_DISPUTE ||
+                            status == PendingTradesListItem.TradeStatus.RETRY_CONFIRMATION;
+                    boolean overdue = status == PendingTradesListItem.TradeStatus.SEND_PAYMENT_OVERDUE ||
+                            status == PendingTradesListItem.TradeStatus.CONFIRM_RECEIPT_OVERDUE;
+                    label.getStyleClass().add(problem ? "trade-status-problem" : overdue ? "trade-status-overdue" :
+                            status.isAttention() ? "trade-status-attention" : "trade-status-waiting");
+                    Circle dot = new Circle(3);
+                    dot.fillProperty().bind(label.textFillProperty());
+                    label.setGraphic(dot);
+                    label.setGraphicTextGap(6);
+                    setAccessibleText(label.getText());
+                    setGraphic(label);
+                } else {
+                    setAccessibleText(null);
+                    setGraphic(null);
+                }
+            }
+        });
+    }
+
+    @SuppressWarnings("UnusedReturnValue")
+    private TableColumn<PendingTradesListItem, PendingTradesListItem> setAvatarColumnCellFactory() {
+        avatarColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        avatarColumn.getStyleClass().add("avatar-column");
+        avatarColumn.setCellFactory(
+                new Callback<>() {
+
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+
+                            @Override
+                            public void updateItem(PendingTradesListItem newItem, boolean empty) {
+                                super.updateItem(newItem, empty);
+                                if (!empty && newItem != null) {
+                                    final Trade trade = newItem.getTrade();
+                                    final NodeAddress tradePeerNodeAddress = trade.getTradePeerNodeAddress();
+                                    int numPastTrades = model.getNumPastTrades(trade);
+                                    String role = Res.get("peerInfoIcon.tooltip.tradePeer");
+                                    Node peerInfoIcon = new PeerInfoIconTrading(tradePeerNodeAddress, // TODO: display maker and taker node addresses for arbitrator
+                                            role,
+                                            numPastTrades,
+                                            privateNotificationManager,
+                                            trade,
+                                            preferences,
+                                            model.accountAgeWitnessService,
+                                            useDevPrivilegeKeys);
+                                    setPadding(new Insets(1, 0, 0, 0));
+                                    setGraphic(peerInfoIcon);
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+                        };
+                    }
+                });
+        return avatarColumn;
+    }
+
+    @SuppressWarnings("UnusedReturnValue")
+    private TableColumn<PendingTradesListItem, PendingTradesListItem> setChatColumnCellFactory() {
+        chatColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        chatColumn.getStyleClass().addAll("avatar-column");
+        chatColumn.setSortable(false);
+        chatColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(TableColumn<PendingTradesListItem, PendingTradesListItem> column) {
+                        return new TableCell<>() {
+
+                            @Override
+                            public void updateItem(PendingTradesListItem newItem, boolean empty) {
+                                super.updateItem(newItem, empty);
+
+                                if (!empty && newItem != null) {
+                                    Trade trade = newItem.getTrade();
+                                    String id = trade.getId();
+
+                                    // We use maps for each trade to avoid multiple listener registrations when
+                                    // switching views. With current implementation we avoid that but we do not
+                                    // remove listeners when a trade is removed (completed) but that has no consequences
+                                    // as we will not receive any message anyway from a closed trade. Supporting it
+                                    // more correctly would require more effort and managing listener deactivation at
+                                    // screen switches (currently we get the update called if we have selected another
+                                    // view.
+                                    Button button;
+                                    if (!buttonByTrade.containsKey(id)) {
+                                        button = FormBuilder.getChatIconButton();
+                                        buttonByTrade.put(id, button);
+                                    } else {
+                                        button = buttonByTrade.get(id);
+                                    }
+
+                                    JFXBadge badge;
+                                    if (!badgeByTrade.containsKey(id)) {
+                                        badge = new ButtonBadge(button) {
+                                            @Override
+                                            public void refreshBadge() {
+                                                super.refreshBadge();
+                                                lookupAll(".badge-pane .label").forEach(Accessibility::mute);
+                                            }
+                                        };
+                                        badge.getStyleClass().add("chat-badge");
+                                        badgeByTrade.put(id, badge);
+                                        badge.setPosition(Pos.TOP_RIGHT);
+                                        Tooltip.install(badge, button.getTooltip());
+                                    } else {
+                                        badge = badgeByTrade.get(id);
+                                    }
+
+                                    badge.setDisable(trade.isArbitrator());
+                                    button.setOnAction(e -> {
+                                        tableView.getSelectionModel().select(newItem);
+                                        openChat(trade);
+                                    });
+
+                                    if (!listenerByTrade.containsKey(id)) {
+                                        ListChangeListener<ChatMessage> listener = c -> updateChatMessageCount(trade, badge);
+                                        listenerByTrade.put(id, listener);
+                                        trade.getChatMessages().addListener(listener);
+                                    }
+
+                                    updateChatMessageCount(trade, badge);
+
+                                    setGraphic(badge);
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+
+                        };
+                    }
+                });
+        return chatColumn;
+    }
+
+    private void setRemoveTradeColumnCellFactory() {
+        moveTradeToFailedColumn.setCellValueFactory((trade) -> new ReadOnlyObjectWrapper<>(trade.getValue()));
+        moveTradeToFailedColumn.getStyleClass().add("avatar-column");
+        moveTradeToFailedColumn.setCellFactory(
+                new Callback<>() {
+                    @Override
+                    public TableCell<PendingTradesListItem, PendingTradesListItem> call(TableColumn<PendingTradesListItem,
+                            PendingTradesListItem> column) {
+                        return new TableCell<>() {
+                            private Trade trade;
+                            private JFXButton warnIconButton, trashIconButton;
+                            private ChangeListener<Object> listener;
+
+                            @Override
+                            public void updateItem(PendingTradesListItem newItem, boolean empty) {
+                                super.updateItem(newItem, empty);
+                                cleanup();
+                                if (!empty && newItem != null) {
+                                    trade = newItem.getTrade();
+                                    listener = (observable, oldValue, newValue) -> UserThread.execute(() -> update());
+                                    trade.stateProperty().addListener(listener);
+                                    trade.errorMessageProperty().addListener(listener);
+                                    update();
+                                }
+                            }
+
+                            private void update() {
+                                if (trade == null) return;
+                                if (isMaybeInvalidTrade(trade)) {
+                                    Text warnIcon = FormBuilder.getMediumSizeIcon(MaterialDesignIcon.ALERT_CIRCLE_OUTLINE);
+                                    Text trashIcon = FormBuilder.getMediumSizeIcon(MaterialDesignIcon.ARROW_RIGHT_BOLD_BOX_OUTLINE);
+                                    if (trade.isTxChainInvalid()) {
+                                        trashIcon.getStyleClass().addAll("icon", "error-icon");
+                                        warnIcon.getStyleClass().addAll("icon", "error-icon");
+                                    } else {
+                                        trashIcon.getStyleClass().addAll("icon", "warn-icon");
+                                        warnIcon.getStyleClass().addAll("icon", "warn-icon");
+                                    }
+
+                                    warnIconButton = new JFXButton("", warnIcon);
+                                    warnIconButton.getStyleClass().add("hidden-icon-button");
+                                    warnIconButton.setTooltip(new Tooltip(Res.get("portfolio.pending.failedTrade.warningIcon.tooltip")));
+                                    Accessibility.nameFromTooltip(warnIconButton);
+                                    warnIconButton.setOnAction(e -> onShowInfoForInvalidTrade(trade));
+
+                                    trashIconButton = new JFXButton("", trashIcon);
+                                    trashIconButton.getStyleClass().add("hidden-icon-button");
+                                    trashIconButton.setTooltip(new Tooltip(Res.get("portfolio.pending.failedTrade.moveTradeToFailedIcon.tooltip")));
+                                    Accessibility.nameFromTooltip(trashIconButton);
+                                    trashIconButton.setOnAction(e -> onMoveInvalidTradeToFailedTrades(trade));
+
+                                    HBox hBox = new HBox();
+                                    hBox.setSpacing(0);
+                                    hBox.getChildren().addAll(warnIconButton, trashIconButton);
+                                    setGraphic(hBox);
+                                } else {
+                                    setGraphic(null);
+                                }
+                            }
+
+                            private void cleanup() {
+                                if (warnIconButton != null) {
+                                    warnIconButton.setOnAction(null);
+                                }
+                                if (trashIconButton != null) {
+                                    trashIconButton.setOnAction(null);
+                                }
+                                if (listener != null && trade != null) {
+                                    trade.stateProperty().removeListener(listener);
+                                    trade.errorMessageProperty().removeListener(listener);
+                                }
+                                trade = null;
+                                listener = null;
+                                warnIconButton = null;
+                                trashIconButton = null;
+                                setGraphic(null);
+                            }
+                        };
+                    }
+                });
+    }
+}

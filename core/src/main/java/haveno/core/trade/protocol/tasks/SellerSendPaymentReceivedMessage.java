@@ -1,0 +1,269 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * This file is part of Haveno.
+ *
+ * Haveno is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Haveno is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Haveno. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.trade.protocol.tasks;
+
+import com.google.common.base.Charsets;
+
+import haveno.common.Timer;
+import haveno.common.UserThread;
+import haveno.common.crypto.Sig;
+import haveno.common.taskrunner.TaskRunner;
+import haveno.core.account.sign.SignedWitness;
+import haveno.core.account.witness.AccountAgeWitnessService;
+import haveno.core.network.MessageState;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.trade.SellerTrade;
+import haveno.core.trade.Trade;
+import haveno.core.trade.messages.PaymentReceivedMessage;
+import haveno.core.trade.messages.TradeMailboxMessage;
+import haveno.core.util.JsonUtil;
+import javafx.beans.value.ChangeListener;
+import lombok.EqualsAndHashCode;
+import lombok.extern.slf4j.Slf4j;
+
+import static com.google.common.base.Preconditions.checkArgument;
+
+import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.commons.lang3.StringUtils;
+
+@Slf4j
+@EqualsAndHashCode(callSuper = true)
+public abstract class SellerSendPaymentReceivedMessage extends SendMailboxMessageTask {
+    private SignedWitness signedWitness = null;
+    private ChangeListener<MessageState> listener;
+    private Timer timer;
+    private static final int MAX_RESEND_ATTEMPTS = 20;
+    private long delayInMin = -1;
+    private int resendCounter = 0;
+    private String unsignedPayoutTxHex = null;
+    private String signedPayoutTxHex = null;
+    private String updatedMultisigHex = null;
+    private PaymentReceivedMessage message = null;
+
+    public SellerSendPaymentReceivedMessage(TaskRunner<Trade> taskHandler, Trade trade) {
+        super(taskHandler, trade);
+    }
+
+    @Override
+    protected void run() {
+        try {
+            runInterceptHook();
+
+            // reset nack state
+            if (getReceiver().isPaymentReceivedMessageNacked()) {
+                getReceiver().setPaymentReceivedMessageState(MessageState.UNDEFINED);
+            }
+
+            // skip if stopped
+            if (stopSending()) {
+                if (!isCompleted()) complete();
+                return;
+            }
+
+            // reset ack state
+            getReceiver().setPaymentReceivedMessageState(MessageState.UNDEFINED);
+            super.run();
+        } catch (Throwable t) {
+            failed(t);
+        }
+    }
+
+    @Override
+    protected TradeMailboxMessage getMailboxMessage(String tradeId) {
+        if (getReceiver().getPaymentReceivedMessage() == null) {
+
+            // sign account witness
+            if (trade.getSelf().getPaymentAccountPayload() == null) {
+                log.warn("Cannot sign account age witness for {} {} as no payment account is set", trade.getClass().getSimpleName(), trade.getId());
+            } else {
+                AccountAgeWitnessService accountAgeWitnessService = processModel.getAccountAgeWitnessService();
+                if (accountAgeWitnessService.isSignWitnessTrade(trade)) {
+                    try {
+                        accountAgeWitnessService.traderSignAndPublishPeersAccountAgeWitness(trade).ifPresent(witness -> signedWitness = witness);
+                        log.info("{} {} signed and published peers account age witness", trade.getClass().getSimpleName(), trade.getId());
+                    } catch (Exception e) {
+                        log.warn("Failed to sign and publish peer's account age witness for {} {}, error={}\n", getClass().getSimpleName(), trade.getId(), e.getMessage(), e);
+                    }
+                }
+            }
+
+            // We do not use a real unique ID here as we want to be able to re-send the exact same message in case the
+            // peer does not respond with an ACK msg in a certain time interval. To avoid that we get dangling mailbox
+            // messages where only the one which gets processed by the peer would be removed we use the same uid. All
+            // other data stays the same when we re-send the message at any time later.
+            String deterministicId = HavenoUtils.getDeterministicId(trade, PaymentReceivedMessage.class, getReceiverNodeAddress());
+            boolean deferPublishPayout = getReceiver() == trade.getArbitrator() && (trade.isPayoutPublished() || trade.getOtherPeer(getReceiver()).isPaymentReceivedMessageArrived()); // informs receiver to expect payout so delay processing
+            unsignedPayoutTxHex = trade.getPayoutTxHex() == null ? trade.getSelf().getUnsignedPayoutTxHex() : null; // signed
+            signedPayoutTxHex = trade.getPayoutTxHex();
+            updatedMultisigHex = trade.getSelf().getUpdatedMultisigHex();
+            message = new PaymentReceivedMessage(
+                    tradeId,
+                    processModel.getMyNodeAddress(),
+                    deterministicId,
+                    unsignedPayoutTxHex,
+                    signedPayoutTxHex,
+                    updatedMultisigHex,
+                    deferPublishPayout,
+                    trade.getTradePeer().getAccountAgeWitness(),
+                    signedWitness,
+                    getReceiver() == trade.getArbitrator() ? trade.getBuyer().getPaymentSentMessage() : null, // buyer already has payment sent message,
+                    trade.getPayoutTxId()
+            );
+
+            // if we signed the peer, attach our signer chain so it can validate the signature locally (#2182)
+            if (signedWitness != null) {
+                message.setSignerChain(new ArrayList<>(processModel.getAccountAgeWitnessService().getSignerChain(signedWitness.getSignerPubKey(), signedWitness.getDate())));
+            }
+
+            // verify message
+            if (trade.isPayoutPublished()) {
+                checkArgument(message.getUpdatedMultisigHex() != null || message.getPayoutTxId() != null, "PaymentReceivedMessage does not include updated multisig hex or payout tx id after payout published");
+            }
+
+            // sign message
+            try {
+                String messageAsJson = JsonUtil.objectToJson(message);
+                byte[] sig = Sig.sign(processModel.getP2PService().getKeyRing().getSignatureKeyPair().getPrivate(), messageAsJson.getBytes(Charsets.UTF_8));
+                message.setSellerSignature(sig);
+                getReceiver().setPaymentReceivedMessage(message);
+                trade.requestPersistence();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return getReceiver().getPaymentReceivedMessage();
+    }
+
+    @Override
+    protected void setStateSent() {
+        log.info("{} sent: tradeId={} at peer {} SignedWitness {}", getClass().getSimpleName(), trade.getId(), getReceiverNodeAddress(), signedWitness);
+        getReceiver().setPaymentReceivedMessageState(MessageState.SENT);
+        tryToSendAgainLater();
+        processModel.getTradeManager().requestPersistence();
+    }
+
+    @Override
+    protected void setStateFault() {
+        log.error("{} failed: tradeId={} at peer {} SignedWitness {}", getClass().getSimpleName(), trade.getId(), getReceiverNodeAddress(), signedWitness);
+        getReceiver().setPaymentReceivedMessageState(MessageState.FAILED);
+        processModel.getTradeManager().requestPersistence();
+    }
+
+    @Override
+    protected void setStateStoredInMailbox() {
+        log.info("{} stored in mailbox: tradeId={} at peer {} SignedWitness {}", getClass().getSimpleName(), trade.getId(), getReceiverNodeAddress(), signedWitness);
+        getReceiver().setPaymentReceivedMessageState(MessageState.STORED_IN_MAILBOX);
+        processModel.getTradeManager().requestPersistence();
+    }
+
+    @Override
+    protected void setStateArrived() {
+        log.info("{} arrived: tradeId={} at peer {} SignedWitness {}", getClass().getSimpleName(), trade.getId(), getReceiverNodeAddress(), signedWitness);
+        getReceiver().setPaymentReceivedMessageState(MessageState.ARRIVED);
+        processModel.getTradeManager().requestPersistence();
+    }
+
+    private void cleanup() {
+        if (timer != null) {
+            timer.stop();
+        }
+        if (listener != null) {
+            getReceiver().getPaymentReceivedMessageStateProperty().removeListener(listener);
+        }
+    }
+
+    private void tryToSendAgainLater() {
+
+        // skip if stopped
+        if (stopSending()) return;
+
+        // stop after max attempts
+        if (resendCounter >= MAX_RESEND_ATTEMPTS) {
+            cleanup();
+            log.warn("We never received an ACK message when sending the PaymentReceivedMessage to the peer. We stop trying to send the message.");
+            return;
+        }
+
+        // register listeners once
+        if (resendCounter == 0) {
+            listener = (observable, oldValue, newValue) -> onMessageStateChange(newValue);
+            getReceiver().getPaymentReceivedMessageStateProperty().addListener(listener);
+            onMessageStateChange(getReceiver().getPaymentReceivedMessageStateProperty().get());
+        }
+
+        // set resend delay
+        if (resendCounter == 0) {
+            delayInMin = SendMailboxMessageTask.INITIAL_RESEND_DELAY_MINS;
+        } else {
+            delayInMin = Math.min(TimeUnit.MILLISECONDS.toMinutes(TradeMailboxMessage.TTL), delayInMin * SendMailboxMessageTask.RESEND_DELAY_MULTIPLIER);
+        }
+
+        // use minimum delay if stored to mailbox
+        if (getReceiver().isPaymentReceivedMessageStored()) {
+            delayInMin = Math.max(delayInMin, SendMailboxMessageTask.INITIAL_RESEND_DELAY_MINS_MAILBOX);
+        }
+
+        // send again after delay
+        log.info("We will send the message again to the peer after a delay of {} min.", delayInMin);
+        if (timer != null) timer.stop();
+        timer = UserThread.runAfter(this::run, delayInMin, TimeUnit.MINUTES);
+        resendCounter++;
+    }
+
+    private void onMessageStateChange(MessageState newValue) {
+        if (stopSending()) {
+            cleanup();
+        }
+    }
+
+    protected boolean stopSending() {
+        if (isMessageReceived()) return true; // stop if message received
+        if (!trade.isPaymentReceived()) return true; // stop if trade state reset
+        if (trade.isPayoutPublished() && !((SellerTrade) trade).resendPaymentReceivedMessagesWithinDuration()) return true; // stop if payout is published and we are not in the resend period
+
+        // check if message state is outdated
+        if (message != null && !message.equals(getReceiver().getPaymentReceivedMessage())) return true;
+        if (unsignedPayoutTxHex != null && !StringUtils.equals(unsignedPayoutTxHex, trade.getSelf().getUnsignedPayoutTxHex())) return true;
+        if (signedPayoutTxHex != null && !StringUtils.equals(signedPayoutTxHex, trade.getPayoutTxHex())) return true;
+        if (updatedMultisigHex != null && !StringUtils.equals(updatedMultisigHex, trade.getSelf().getUpdatedMultisigHex())) return true;
+        return false;
+    }
+
+    protected boolean isMessageReceived() {
+        return getReceiver().isPaymentReceivedMessageAckedOrNacked();
+    }
+}

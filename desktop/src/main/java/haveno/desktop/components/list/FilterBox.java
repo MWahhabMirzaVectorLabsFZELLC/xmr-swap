@@ -1,0 +1,107 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.components.list;
+
+import haveno.common.UserThread;
+import haveno.desktop.components.InputTextField;
+import haveno.desktop.util.GUIUtil;
+import haveno.desktop.util.filtering.FilterableListItem;
+import javafx.beans.InvalidationListener;
+import javafx.beans.value.ChangeListener;
+import javafx.collections.transformation.FilteredList;
+import javafx.scene.control.TableView;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+
+public class FilterBox extends HBox {
+    private final InputTextField textField;
+    private FilteredList<? extends FilterableListItem> filteredList;
+    private TableView<? extends FilterableListItem> tableView;
+
+    private ChangeListener<String> listener;
+    private final InvalidationListener listListener;
+
+    public FilterBox() {
+        super();
+        setSpacing(5.0);
+
+        textField = new InputTextField();
+        textField.setMinWidth(500);
+        listListener = observable -> GUIUtil.updateFilterPlaceholder(tableView, filteredList, textField.getText());
+
+        getChildren().addAll(textField);
+    }
+
+    /** Let the input fill the box width and shrink to the given min, for inline placement. */
+    public void setInputFillWidth(double minWidth) {
+        textField.setMinWidth(minWidth);
+        textField.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(textField, Priority.ALWAYS);
+    }
+
+    public void initialize(FilteredList<? extends FilterableListItem> filteredList,
+                           TableView<? extends FilterableListItem> tableView) {
+        this.filteredList = filteredList;
+        this.tableView = tableView;
+        listener = (observable, oldValue, newValue) -> {
+            UserThread.execute(() -> {
+                applyFilter(tableView, null);
+            });
+        };
+    }
+
+    public void initializeWithCallback(FilteredList<? extends FilterableListItem> filteredList,
+                                       TableView<? extends FilterableListItem> tableView, Runnable callback) {
+        this.filteredList = filteredList;
+        this.tableView = tableView;
+        listener = (observable, oldValue, newValue) -> applyFilter(tableView, callback);
+        applyFilter(tableView, callback); // first time init
+    }
+
+    public void activate() {
+        textField.textProperty().addListener(listener);
+        filteredList.addListener(listListener);
+        applyFilteredListPredicate(textField.getText());
+    }
+
+    public void deactivate() {
+        textField.textProperty().removeListener(listener);
+        filteredList.removeListener(listListener);
+    }
+
+    private void applyFilter(TableView<? extends FilterableListItem> tableView, Runnable callback) {
+        tableView.getSelectionModel().clearSelection();
+        applyFilteredListPredicate(textField.getText());
+        if (callback != null) {
+            callback.run();
+        }
+    }
+
+    private void applyFilteredListPredicate(String filterString) {
+        filteredList.setPredicate(item -> item.match(filterString));
+        GUIUtil.updateFilterPlaceholder(tableView, filteredList, filterString);
+    }
+
+    public void setPromptText(String promptText) {
+        textField.setPromptText(promptText);
+    }
+
+    public void clear() {
+        textField.clear();
+    }
+}

@@ -1,0 +1,24 @@
+getaddressbalance
+
+NAME
+----
+getaddressbalance - get wallet address balance
+
+SYNOPSIS
+--------
+getaddressbalance
+		--address=<value>
+
+DESCRIPTION
+-----------
+Returns the balance of an XMR address in the Haveno server wallet.
+
+OPTIONS
+-------
+--address
+		The XMR address in the Haveno server wallet.
+
+EXAMPLES
+--------
+Show address balance:
+$ ./haveno-cli --password=xyz --port=9998 getaddressbalance --address=<xmr-address>

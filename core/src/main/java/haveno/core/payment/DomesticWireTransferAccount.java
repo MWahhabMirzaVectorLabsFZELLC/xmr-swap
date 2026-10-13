@@ -1,0 +1,115 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.payment;
+
+import haveno.core.api.model.PaymentAccountFormField;
+import haveno.core.locale.BankUtil;
+import haveno.core.locale.Country;
+import haveno.core.locale.CountryUtil;
+import haveno.core.locale.TraditionalCurrency;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.payment.payload.BankAccountPayload;
+import haveno.core.payment.payload.DomesticWireTransferAccountPayload;
+import haveno.core.payment.payload.PaymentAccountPayload;
+import haveno.core.payment.payload.PaymentMethod;
+import lombok.EqualsAndHashCode;
+import lombok.NonNull;
+
+import javax.annotation.Nullable;
+import java.util.Arrays;
+import java.util.List;
+
+@EqualsAndHashCode(callSuper = true)
+public final class DomesticWireTransferAccount extends CountryBasedPaymentAccount implements SameCountryRestrictedBankAccount {
+
+    public static final List<TradeCurrency> SUPPORTED_CURRENCIES = List.of(new TraditionalCurrency("USD"));
+
+    private static final List<PaymentAccountFormField.FieldId> INPUT_FIELD_IDS = List.of(
+            PaymentAccountFormField.FieldId.COUNTRY,
+            PaymentAccountFormField.FieldId.HOLDER_NAME,
+            PaymentAccountFormField.FieldId.HOLDER_ADDRESS,
+            PaymentAccountFormField.FieldId.BANK_NAME,
+            PaymentAccountFormField.FieldId.BRANCH_ID,
+            PaymentAccountFormField.FieldId.ACCOUNT_NR,
+            PaymentAccountFormField.FieldId.TRADE_CURRENCIES,
+            PaymentAccountFormField.FieldId.ACCOUNT_NAME,
+            PaymentAccountFormField.FieldId.SALT
+    );
+
+    public DomesticWireTransferAccount() {
+        super(PaymentMethod.DOMESTIC_WIRE_TRANSFER);
+    }
+
+    @Override
+    protected PaymentAccountPayload createPayload() {
+        return new DomesticWireTransferAccountPayload(paymentMethod.getId(), id);
+    }
+
+    @Override
+    public String getBankId() {
+        return ((BankAccountPayload) paymentAccountPayload).getBankId();
+    }
+
+    @Override
+    public String getCountryCode() {
+        return getCountry() != null ? getCountry().code : "";
+    }
+
+    public DomesticWireTransferAccountPayload getPayload() {
+        return (DomesticWireTransferAccountPayload) paymentAccountPayload;
+    }
+
+    @Override
+    public String getMessageForBuyer() {
+        return "payment.domesticWire.info.buyer";
+    }
+
+    @Override
+    public String getMessageForSeller() {
+        return "payment.domesticWire.info.seller";
+    }
+
+    @Override
+    public String getMessageForAccountCreation() {
+        return "payment.domesticWire.info.account";
+    }
+
+    @Override
+    public @NonNull List<TradeCurrency> getSupportedCurrencies() {
+        return SUPPORTED_CURRENCIES;
+    }
+
+    @Override
+    public @NonNull List<PaymentAccountFormField.FieldId> getInputFieldIds() {
+        return INPUT_FIELD_IDS;
+    }
+
+    @Override
+    @Nullable
+    public List<Country> getSupportedCountries() {
+        return Arrays.asList(CountryUtil.findCountryByCode("US").get());
+    }
+
+    @Override
+    protected PaymentAccountFormField getEmptyFormField(PaymentAccountFormField.FieldId fieldId) {
+        var field = super.getEmptyFormField(fieldId);
+        if (field.getId() == PaymentAccountFormField.FieldId.TRADE_CURRENCIES) field.setComponent(PaymentAccountFormField.Component.SELECT_ONE);
+        if (field.getId() == PaymentAccountFormField.FieldId.BRANCH_ID) field.setLabel(BankUtil.getBranchIdLabel("US"));
+        return field;
+    }
+}

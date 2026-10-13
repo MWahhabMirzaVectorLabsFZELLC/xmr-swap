@@ -1,0 +1,2121 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.util;
+
+import com.google.common.base.Charsets;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.client.j2se.MatrixToImageWriter;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.QRCodeWriter;
+
+import de.jensd.fx.glyphs.materialdesignicons.MaterialDesignIcon;
+import de.jensd.fx.glyphs.materialdesignicons.MaterialDesignIconView;
+import haveno.common.UserThread;
+import haveno.common.config.Config;
+import haveno.common.file.CorruptedStorageFileHandler;
+import haveno.common.persistence.PersistenceManager;
+import haveno.common.proto.persistable.PersistableEnvelope;
+import haveno.common.proto.persistable.PersistenceProtoResolver;
+import haveno.common.util.Tuple2;
+import haveno.common.util.Tuple3;
+import haveno.common.util.Utilities;
+import haveno.core.account.witness.AccountAgeWitness;
+import haveno.core.account.witness.AccountAgeWitnessService;
+import haveno.core.api.XmrConnectionService;
+import haveno.core.locale.Country;
+import haveno.core.locale.CountryUtil;
+import haveno.core.locale.CryptoCurrency;
+import haveno.core.locale.CurrencyUtil;
+import haveno.core.locale.GlobalSettings;
+import haveno.core.locale.Res;
+import haveno.core.locale.TradeCurrency;
+import haveno.core.payment.PaymentAccount;
+import haveno.core.payment.PaymentAccountList;
+import haveno.core.payment.payload.PaymentMethod;
+import haveno.core.provider.price.PriceFeedService;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.trade.Trade;
+import haveno.core.user.DontShowAgainLookup;
+import haveno.core.user.Preferences;
+import haveno.core.user.User;
+import haveno.core.util.FormattingUtils;
+import haveno.core.util.coin.CoinFormatter;
+import haveno.core.xmr.wallet.XmrWalletService;
+import haveno.desktop.Navigation;
+import haveno.desktop.components.AutoTooltipLabel;
+import haveno.desktop.components.InfoAutoTooltipLabel;
+import haveno.desktop.components.indicator.TxConfidenceIndicator;
+import haveno.desktop.main.MainView;
+import haveno.desktop.main.account.AccountView;
+import haveno.desktop.main.account.content.traditionalaccounts.TraditionalAccountsView;
+import haveno.desktop.main.overlays.popups.Popup;
+import haveno.network.p2p.P2PService;
+import javafx.animation.AnimationTimer;
+import javafx.animation.PauseTransition;
+import javafx.application.Platform;
+import javafx.beans.InvalidationListener;
+import javafx.beans.binding.Bindings;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.WeakChangeListener;
+import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
+import javafx.collections.ObservableList;
+import javafx.collections.transformation.FilteredList;
+import javafx.css.PseudoClass;
+import javafx.event.ActionEvent;
+import javafx.event.EventHandler;
+import javafx.geometry.Bounds;
+import javafx.geometry.HPos;
+import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
+import javafx.scene.AccessibleRole;
+import javafx.scene.Cursor;
+import javafx.scene.Node;
+import javafx.scene.Scene;
+import javafx.scene.control.ButtonBase;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.DatePicker;
+import javafx.scene.control.Label;
+import javafx.scene.control.Labeled;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
+import javafx.scene.control.ScrollBar;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
+import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
+import javafx.scene.control.skin.DatePickerSkin;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelFormat;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
+import javafx.scene.input.MouseEvent;
+import javafx.scene.input.ScrollEvent;
+import javafx.scene.layout.AnchorPane;
+import javafx.scene.layout.ColumnConstraints;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Rectangle;
+import javafx.scene.text.Text;
+import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
+import javafx.stage.Screen;
+import javafx.stage.Stage;
+import javafx.stage.Window;
+import javafx.stage.WindowEvent;
+import javafx.util.Callback;
+import javafx.util.Duration;
+import javafx.util.StringConverter;
+import lombok.extern.slf4j.Slf4j;
+import monero.common.MoneroUtils;
+import monero.daemon.model.MoneroTx;
+import monero.wallet.model.MoneroTxConfig;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.lang3.StringUtils;
+import org.bitcoinj.core.Coin;
+import org.jetbrains.annotations.NotNull;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStreamWriter;
+import java.lang.reflect.Field;
+import java.math.BigInteger;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Currency;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
+import static com.google.common.base.Preconditions.checkArgument;
+import static haveno.desktop.util.FormBuilder.addTopLabelComboBoxComboBox;
+
+@Slf4j
+public class GUIUtil {
+    public final static String SHOW_ALL_FLAG = "list.currency.showAll"; // Used for accessing the i18n resource
+    public final static String EDIT_FLAG = "list.currency.editList"; // Used for accessing the i18n resource
+
+    public final static String OPEN_WEB_PAGE_KEY = "warnOpenURLWhenTorEnabled";
+
+    public final static int NUM_DECIMALS_UNIT = 0;
+    public final static int NUM_DECIMALS_PRICE_LESS_PRECISE = 3;
+    public final static int NUM_DECIMALS_PRECISE = 7;
+    public final static int AMOUNT_DECIMALS_WITH_ZEROS = 3;
+    public final static int AMOUNT_DECIMALS = 4;
+    public static final double NUM_OFFERS_TRANSLATE_X = -13.0;
+
+    public static final boolean disablePaymentUriLabel = true; // universally disable payment uri labels, allowing bigger xmr logo overlays
+    private static Preferences preferences;
+
+    public static void setPreferences(Preferences preferences) {
+        GUIUtil.preferences = preferences;
+    }
+
+    public static String getUserLanguage() {
+        return preferences.getUserLanguage();
+    }
+
+    public static double getScrollbarWidth(Node scrollablePane) {
+        Node node = scrollablePane.lookup(".scroll-bar");
+        if (node instanceof ScrollBar) {
+            final ScrollBar bar = (ScrollBar) node;
+            if (bar.getOrientation().equals(Orientation.VERTICAL))
+                return bar.getWidth();
+        }
+        return 0;
+    }
+
+    public static void focusWhenAddedToScene(Node node) {
+        node.sceneProperty().addListener((observable, oldValue, newValue) -> {
+            if (null != newValue) {
+                node.requestFocus();
+            }
+        });
+    }
+
+    public static void exportAccounts(ArrayList<PaymentAccount> accounts,
+                                      String fileName,
+                                      Preferences preferences,
+                                      Stage stage,
+                                      PersistenceProtoResolver persistenceProtoResolver,
+                                      CorruptedStorageFileHandler corruptedStorageFileHandler) {
+        if (!accounts.isEmpty()) {
+            String directory = getDirectoryFromChooser(preferences, stage);
+            if (!directory.isEmpty()) {
+                PersistenceManager<PersistableEnvelope> persistenceManager = new PersistenceManager<>(new File(directory), persistenceProtoResolver, corruptedStorageFileHandler, null);
+                PaymentAccountList paymentAccounts = new PaymentAccountList(accounts);
+                persistenceManager.initialize(paymentAccounts, fileName, PersistenceManager.Source.PRIVATE_LOW_PRIO);
+                persistenceManager.persistNow(() -> {
+                    persistenceManager.shutdown();
+                    new Popup().feedback(Res.get("guiUtil.accountExport.savedToPath",
+                            Paths.get(directory, fileName).toAbsolutePath()))
+                            .show();
+                });
+            }
+        } else {
+            new Popup().warning(Res.get("guiUtil.accountExport.noAccountSetup")).show();
+        }
+    }
+
+    public static void importAccounts(User user,
+                                      String fileName,
+                                      Preferences preferences,
+                                      Stage stage,
+                                      PersistenceProtoResolver persistenceProtoResolver,
+                                      CorruptedStorageFileHandler corruptedStorageFileHandler) {
+        FileChooser fileChooser = new FileChooser();
+        File initDir = new File(preferences.getDirectoryChooserPath());
+        if (initDir.isDirectory()) {
+            fileChooser.setInitialDirectory(initDir);
+        }
+        fileChooser.setTitle(Res.get("guiUtil.accountExport.selectPath", fileName));
+        File file = fileChooser.showOpenDialog(stage.getOwner());
+        if (file != null) {
+            String path = file.getAbsolutePath();
+            if (Paths.get(path).getFileName().toString().equals(fileName)) {
+                String directory = Paths.get(path).getParent().toString();
+                preferences.setDirectoryChooserPath(directory);
+                PersistenceManager<PaymentAccountList> persistenceManager = new PersistenceManager<>(new File(directory), persistenceProtoResolver, corruptedStorageFileHandler, null);
+                persistenceManager.readPersisted(fileName, persisted -> {
+                            StringBuilder msg = new StringBuilder();
+                            HashSet<PaymentAccount> paymentAccounts = new HashSet<>();
+                            synchronized (persisted.getList()) {
+                                persisted.getList().forEach(paymentAccount -> {
+                                    String id = paymentAccount.getId();
+                                    if (user.getPaymentAccount(id) == null) {
+                                        paymentAccounts.add(paymentAccount);
+                                        msg.append(Res.get("guiUtil.accountExport.tradingAccount", id));
+                                    } else {
+                                        msg.append(Res.get("guiUtil.accountImport.noImport", id));
+                                    }
+                                });
+                            }
+                            user.addImportedPaymentAccounts(paymentAccounts);
+                            new Popup().feedback(Res.get("guiUtil.accountImport.imported", path, msg)).show();
+                        },
+                        () -> {
+                            new Popup().warning(Res.get("guiUtil.accountImport.noAccountsFound", path, fileName)).show();
+                        });
+            } else {
+                log.error("The selected file is not the expected file for import. The expected file name is: " + fileName + ".");
+            }
+        }
+    }
+
+
+    public static byte[] generateQrCodePng(String data, int width, int height) {
+        try {
+            QRCodeWriter qrCodeWriter = new QRCodeWriter();
+            BitMatrix bitMatrix = qrCodeWriter.encode(data, BarcodeFormat.QR_CODE, width, height);
+            ByteArrayOutputStream pngOutputStream = new ByteArrayOutputStream();
+            MatrixToImageWriter.writeToStream(bitMatrix, "PNG", pngOutputStream);
+            return pngOutputStream.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to generate QR code", e);
+        }
+    }
+
+    public static <T> void exportCSV(String fileName, Function<T, String[]> headerConverter,
+                                     Function<T, String[]> contentConverter, T emptyItem,
+                                     List<T> list, Stage stage) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setInitialFileName(fileName);
+        File file = fileChooser.showSaveDialog(stage);
+        if (file != null) {
+            try (OutputStreamWriter outputStreamWriter = new OutputStreamWriter(new FileOutputStream(file, false), Charsets.UTF_8);
+                 CSVPrinter printer = new CSVPrinter(outputStreamWriter, CSVFormat.DEFAULT)) {
+                printer.printRecord((Object[]) headerConverter.apply(emptyItem));
+                for (T item : list) {
+                    printer.printRecord((Object[]) contentConverter.apply(item));
+                }
+            } catch (RuntimeException | IOException e) {
+                e.printStackTrace();
+                log.error(e.getMessage());
+                new Popup().error(Res.get("guiUtil.accountExport.exportFailed", e.getMessage())).show();
+            }
+        }
+    }
+
+    public static void exportJSON(String fileName, JsonElement data, Stage stage) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setInitialFileName(fileName);
+        File file = fileChooser.showSaveDialog(stage);
+        if (file != null) {
+            try (OutputStreamWriter outputStreamWriter = new OutputStreamWriter(new FileOutputStream(file, false), Charsets.UTF_8)) {
+                Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                outputStreamWriter.write(gson.toJson(data));
+            } catch (RuntimeException | IOException e) {
+                e.printStackTrace();
+                log.error(e.getMessage());
+                new Popup().error(Res.get("guiUtil.accountExport.exportFailed", e.getMessage()));
+            }
+        }
+    }
+
+    private static String getDirectoryFromChooser(Preferences preferences, Stage stage) {
+        DirectoryChooser directoryChooser = new DirectoryChooser();
+        File initDir = new File(preferences.getDirectoryChooserPath());
+        if (initDir.isDirectory()) {
+            directoryChooser.setInitialDirectory(initDir);
+        }
+        directoryChooser.setTitle(Res.get("guiUtil.accountExport.selectExportPath"));
+        File dir = directoryChooser.showDialog(stage);
+        if (dir != null) {
+            String directory = dir.getAbsolutePath();
+            preferences.setDirectoryChooserPath(directory);
+            return directory;
+        } else {
+            return "";
+        }
+    }
+
+    // graphic-only cells announce blank, so voice the row text on the cell and on its first child
+    // (and that child's graphic), where VoiceOver lands when arrowing through rows
+    private static void setAccessibleRowText(ListCell<?> cell, Pane pane, String text) {
+        cell.setAccessibleText(text);
+        if (pane.getChildren().isEmpty()) return;
+        Node first = pane.getChildren().get(0);
+        first.setAccessibleText(text);
+        if (first instanceof Labeled && ((Labeled) first).getGraphic() != null) {
+            Node graphic = ((Labeled) first).getGraphic();
+            graphic.setAccessibleRole(AccessibleRole.TEXT);
+            graphic.setAccessibleText(text);
+        }
+    }
+
+    // row text from the visible labels, for cells without a more readable phrasing of their own
+    private static void setAccessibleTextFromLabels(ListCell<?> cell, Pane pane) {
+        String joined = pane.getChildren().stream()
+                .filter(node -> node instanceof Labeled)
+                .map(node -> ((Labeled) node).getText())
+                .filter(t -> t != null && !t.isEmpty())
+                .collect(Collectors.joining(", "));
+        setAccessibleRowText(cell, pane, joined.isEmpty() ? null : joined);
+    }
+
+    public static Callback<ListView<CurrencyListItem>, ListCell<CurrencyListItem>> getCurrencyListItemCellFactory(String postFixSingle,
+                                                                                                                  String postFixMulti) {
+        return p -> new ListCell<>() {
+            @Override
+            protected void updateItem(CurrencyListItem item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (item != null && !empty) {
+
+                    String code = item.tradeCurrency.getCode();
+
+                    boolean isCrypto = CurrencyUtil.isCryptoCurrency(code);
+
+                    HBox box = new HBox();
+                    box.setSpacing(20);
+                    box.setAlignment(Pos.CENTER_LEFT);
+                    Label label1 = new AutoTooltipLabel(getCurrencyType(code));
+                    label1.getStyleClass().add("currency-label-small");
+                    Label label2 = new AutoTooltipLabel(isCrypto ? item.tradeCurrency.getNameAndCode() : code);
+                    label2.getStyleClass().add("currency-label");
+                    Label label3 = new AutoTooltipLabel(isCrypto ? "" : item.tradeCurrency.getName());
+                    if (!isCrypto) label3.getStyleClass().add("currency-label");
+                    Label label4 = new AutoTooltipLabel();
+
+                    boolean showOfferCount = false;
+                    String announced; // name-first for screen readers; the visible row leads with the code
+
+                    switch (code) {
+                        case GUIUtil.SHOW_ALL_FLAG:
+                            label1.setText(Res.get("shared.all"));
+                            label2.setText(Res.get("list.currency.showAll"));
+                            announced = Res.get("list.currency.showAll");
+                            break;
+                        case GUIUtil.EDIT_FLAG:
+                            label1.setText(Res.get("shared.edit"));
+                            label2.setText(Res.get("list.currency.editList"));
+                            announced = Res.get("list.currency.editList");
+                            break;
+                        default:
+
+                            // use icon if available
+                            Node currencyIcon = getCurrencyGraphic(code, CURRENCY_GRAPHIC_ROW_SIZE);
+                            if (currencyIcon != null) {
+                                label1.setText("");
+                                label1.setGraphic(currencyIcon);
+                            }
+
+                            if (item.numTrades > 0) {
+                                Label offersTarget = isCrypto ? label3 : label4;
+                                HBox.setMargin(offersTarget, new Insets(0, 0, 0, NUM_OFFERS_TRANSLATE_X));
+                                offersTarget.getStyleClass().add("offer-label");
+                                offersTarget.setText(item.numTrades + " " + (item.numTrades == 1 ? postFixSingle : postFixMulti));
+                                showOfferCount = true;
+                            }
+                            announced = item.tradeCurrency.getName() + ", " + Accessibility.spellOut(code)
+                                    + (showOfferCount ? ", " + (isCrypto ? label3 : label4).getText() : "");
+                    }
+
+                    // append the offer pill only when present so the row ends at real content
+                    box.getChildren().addAll(label1, label2);
+                    if (!isCrypto) box.getChildren().add(label3);
+                    if (showOfferCount) box.getChildren().add(isCrypto ? label3 : label4);
+
+                    setGraphic(box);
+                    setAccessibleRowText(this, box, announced);
+
+                } else {
+                    setGraphic(null);
+                    setAccessibleText(null);
+                }
+            }
+        };
+    }
+
+    public static ListCell<TradeCurrency> getTradeCurrencyButtonCell(String postFixSingle,
+                                                                     String postFixMulti,
+                                                                     Map<String, Integer> offerCounts) {
+        return new ListCell<>() {
+
+            @Override
+            protected void updateItem(TradeCurrency item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (item != null && !empty) {
+                    String code = item.getCode();
+
+                    AnchorPane pane = new AnchorPane();
+                    Label currency = new AutoTooltipLabel(item.getName() + " (" + item.getCode() + ")");
+                    currency.getStyleClass().add("currency-label-selected");
+                    AnchorPane.setLeftAnchor(currency, 0.0);
+                    pane.getChildren().add(currency);
+
+                    Optional<Integer> offerCountOptional = Optional.ofNullable(offerCounts.get(code));
+
+                    switch (code) {
+                        case GUIUtil.SHOW_ALL_FLAG:
+                            currency.setText(Res.get("list.currency.showAll"));
+                            break;
+                        case GUIUtil.EDIT_FLAG:
+                            currency.setText(Res.get("list.currency.editList"));
+                            break;
+                        default:
+                            if (offerCountOptional.isPresent()) {
+                                Label numberOfOffers = new AutoTooltipLabel(offerCountOptional.get() + " " +
+                                        (offerCountOptional.get() == 1 ? postFixSingle : postFixMulti));
+                                numberOfOffers.getStyleClass().add("offer-label-small");
+                                AnchorPane.setRightAnchor(numberOfOffers, 0.0);
+                                AnchorPane.setBottomAnchor(numberOfOffers, 2.0);
+                                pane.getChildren().add(numberOfOffers);
+                            }
+                    }
+
+                    setGraphic(pane);
+                    setText("");
+                    setAccessibleTextFromLabels(this, pane);
+                } else {
+                    setGraphic(null);
+                    setText("");
+                    setAccessibleText(null);
+                }
+            }
+        };
+    }
+
+    public static Callback<ListView<TradeCurrency>, ListCell<TradeCurrency>> getTradeCurrencyCellFactory(String postFixSingle,
+                                                                                                         String postFixMulti,
+                                                                                                         Map<String, Integer> offerCounts) {
+        return p -> new ListCell<>() {
+            @Override
+            protected void updateItem(TradeCurrency item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (item != null && !empty) {
+
+                    String code = item.getCode();
+                    boolean isCrypto = CurrencyUtil.isCryptoCurrency(code);
+
+                    HBox box = new HBox();
+                    box.setSpacing(20);
+                    box.setAlignment(Pos.CENTER_LEFT);
+
+                    Label label1 = new AutoTooltipLabel(getCurrencyType(code));
+                    label1.getStyleClass().add("currency-label-small");
+                    Label label2 = new AutoTooltipLabel(isCrypto ? item.getNameAndCode() : code);
+                    label2.getStyleClass().add("currency-label");
+                    Label label3 = new AutoTooltipLabel(isCrypto ? "" : item.getName());
+                    if (!isCrypto) label3.getStyleClass().add("currency-label");
+                    Label label4 = new AutoTooltipLabel();
+
+                    Optional<Integer> offerCountOptional = Optional.ofNullable(offerCounts.get(code));
+                    String announced; // name-first for screen readers; the visible row leads with the code
+
+                    switch (code) {
+                        case GUIUtil.SHOW_ALL_FLAG:
+                            label1.setText(Res.get("shared.all"));
+                            label2.setText(Res.get("list.currency.showAll"));
+                            announced = Res.get("list.currency.showAll");
+                            break;
+                        case GUIUtil.EDIT_FLAG:
+                            label1.setText(Res.get("shared.edit"));
+                            label2.setText(Res.get("list.currency.editList"));
+                            announced = Res.get("list.currency.editList");
+                            break;
+                        default:
+
+                            // use icon if available
+                            Node currencyIcon = getCurrencyGraphic(code, CURRENCY_GRAPHIC_ROW_SIZE);
+                            if (currencyIcon != null) {
+                                label1.setText("");
+                                label1.setGraphic(currencyIcon);
+                            }
+
+                            Label offersTarget = isCrypto ? label3 : label4;
+                            offerCountOptional.ifPresent(numOffers -> {
+                                HBox.setMargin(offersTarget, new Insets(0, 0, 0, NUM_OFFERS_TRANSLATE_X));
+                                offersTarget.getStyleClass().add("offer-label");
+                                offersTarget.setText(numOffers + " " + (numOffers == 1 ? postFixSingle : postFixMulti));
+                            });
+                            announced = item.getName() + ", " + Accessibility.spellOut(code)
+                                    + (offerCountOptional.isPresent() ? ", " + offersTarget.getText() : "");
+                    }
+
+                    // append the offer pill only when present so the row ends at real content
+                    box.getChildren().addAll(label1, label2);
+                    if (!isCrypto) box.getChildren().add(label3);
+                    if (offerCountOptional.isPresent()) box.getChildren().add(isCrypto ? label3 : label4);
+
+                    setGraphic(box);
+                    setAccessibleRowText(this, box, announced);
+
+                } else {
+                    setGraphic(null);
+                    setAccessibleText(null);
+                }
+            }
+        };
+    }
+
+    public static Callback<ListView<TradeCurrency>, ListCell<TradeCurrency>> getTradeCurrencyCellFactoryNameAndCode() {
+        return p -> new ListCell<>() {
+            @Override
+            protected void updateItem(TradeCurrency item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (item != null && !empty) {
+
+                    HBox box = new HBox();
+                    box.setSpacing(10);
+
+                    Label label1 = new AutoTooltipLabel(getCurrencyType(item.getCode()));
+                    label1.getStyleClass().add("currency-label-small");
+                    Label label2 = new AutoTooltipLabel(item.getNameAndCode());
+                    label2.getStyleClass().add("currency-label");
+
+                    // use icon if available
+                    Node currencyIcon = getCurrencyGraphic(item.getCode(), CURRENCY_GRAPHIC_ROW_SIZE);
+                    if (currencyIcon != null) {
+                        label1.setText("");
+                        label1.setGraphic(currencyIcon);
+                    }
+
+                    box.getChildren().addAll(label1, label2);
+
+                    setGraphic(box);
+                    setAccessibleRowText(this, box, item.getName() + ", " + Accessibility.spellOut(item.getCode()));
+
+                } else {
+                    setGraphic(null);
+                    setAccessibleText(null);
+                }
+            }
+        };
+    }
+    
+    private static String getCurrencyType(String code) {
+        if (CurrencyUtil.isFiatCurrency(code)) {
+            return Res.get("shared.fiat");
+        } else if (CurrencyUtil.isTraditionalCurrency(code)) {
+            return Res.get("shared.traditional");
+        } else if (CurrencyUtil.isCryptoCurrency(code)) {
+            return Res.get("shared.crypto");
+        } else {
+            return "";
+        }
+    }
+
+    public static ListCell<PaymentMethod> getPaymentMethodButtonCell() {
+        return new ListCell<>() {
+
+            @Override
+            protected void updateItem(PaymentMethod item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (item != null && !empty) {
+                    String id = item.getId();
+
+                    this.getStyleClass().add("currency-label-selected");
+
+                    if (id.equals(GUIUtil.SHOW_ALL_FLAG)) {
+                        setText(Res.get("list.currency.showAll"));
+                    } else {
+                        setText(Res.get(id));
+                    }
+                } else {
+                    setText("");
+                }
+            }
+        };
+    }
+
+    public static Callback<ListView<PaymentMethod>, ListCell<PaymentMethod>> getPaymentMethodCellFactory() {
+        return getPaymentMethodCellFactory("", "", Map.of());
+    }
+
+    public static Callback<ListView<PaymentMethod>, ListCell<PaymentMethod>> getPaymentMethodCellFactory(String postFixSingle,
+                                                                                                         String postFixMulti,
+                                                                                                         Map<String, Integer> offerCounts) {
+        return p -> new ListCell<>() {
+            @Override
+            protected void updateItem(PaymentMethod method, boolean empty) {
+                super.updateItem(method, empty);
+
+                if (method != null && !empty) {
+                    String id = method.getId();
+
+                    HBox box = new HBox();
+                    box.setSpacing(20);
+                    box.setAlignment(Pos.CENTER_LEFT);
+                    box.setPadding(new Insets(0, 0, 0, (CURRENCY_LABEL_SMALL_WIDTH - CURRENCY_GRAPHIC_ROW_SIZE) / 2)); // match the currency list's leftmost inset (logo centered in its label)
+                    Label paymentMethod = new AutoTooltipLabel(Res.get(id));
+                    paymentMethod.getStyleClass().add("currency-label");
+                    Label offerCount = new AutoTooltipLabel();
+                    box.getChildren().addAll(paymentMethod, offerCount);
+
+                    if (id.equals(GUIUtil.SHOW_ALL_FLAG)) {
+                        paymentMethod.setText(Res.get("list.currency.showAll"));
+                    } else {
+                        Optional.ofNullable(offerCounts.get(id)).ifPresent(numOffers -> {
+                            HBox.setMargin(offerCount, new Insets(0, 0, 0, NUM_OFFERS_TRANSLATE_X));
+                            offerCount.getStyleClass().add("offer-label");
+                            offerCount.setText(numOffers + " " + (numOffers == 1 ? postFixSingle : postFixMulti));
+                        });
+                    }
+
+                    setGraphic(box);
+                    setAccessibleTextFromLabels(this, box);
+
+                } else {
+                    setGraphic(null);
+                    setAccessibleText(null);
+                }
+            }
+        };
+    }
+
+    // the amount approximated in the user's preferred currency, or null while no price is available
+    public static String getFiatText(BigInteger atomicAmount, PriceFeedService priceFeedService, Preferences preferences) {
+        if (atomicAmount == null || atomicAmount.signum() <= 0 || priceFeedService == null || preferences == null) return null;
+        TradeCurrency currency = preferences.getPreferredTradeCurrency();
+        if (currency == null) return null;
+        return DisplayUtils.formatBalanceEstimate(atomicAmount, priceFeedService.getMarketPrice(currency.getCode()));
+    }
+
+    public static void updateConfidence(MoneroTx tx,
+                                        Tooltip tooltip,
+                                        TxConfidenceIndicator txConfidenceIndicator) {
+        updateConfidence(tx, null, tooltip, txConfidenceIndicator);
+    }
+
+    public static void updateConfidence(MoneroTx tx,
+                                        Trade trade,
+                                        Tooltip tooltip,
+                                        TxConfidenceIndicator txConfidenceIndicator) {
+        if (tx == null || tx.getNumConfirmations() == null || !tx.isRelayed()) {
+            if (trade != null && trade.isDepositsUnlocked()) {
+                if (tx == null) {
+                    tooltip.setText(Res.get("confidence.confirmed", ">=10"));
+                } else {
+                    tooltip.setText(Res.get("confidence.confirmed", tx.getNumConfirmations()));
+                }
+                txConfidenceIndicator.setProgress(1.0);
+            } else {
+                tooltip.setText(Res.get("confidence.unknown"));
+                txConfidenceIndicator.setProgress(-1);
+            }
+        } else {
+            if (tx.isFailed()) {
+                tooltip.setText(Res.get("confidence.invalid"));
+                txConfidenceIndicator.setProgress(0);
+            } else if (tx.isConfirmed()) {
+                tooltip.setText(Res.get("confidence.confirmed", tx.getNumConfirmations()));
+                txConfidenceIndicator.setProgress((double) tx.getNumConfirmations() / (double) XmrWalletService.NUM_BLOCKS_UNLOCK);
+            } else {
+                tooltip.setText(Res.get("confidence.confirmed", 0));
+                txConfidenceIndicator.setProgress(-1);
+            }
+        }
+
+        txConfidenceIndicator.setPrefSize(24, 24);
+    }
+
+    public static void openWebPage(String target) {
+        openWebPage(target, true, null);
+    }
+
+    public static void openWebPage(String target, boolean useReferrer) {
+        openWebPage(target, useReferrer, null);
+    }
+
+    public static void openWebPageNoPopup(String target) {
+        doOpenWebPage(target);
+    }
+
+    public static void openWebPage(String target, boolean useReferrer, Runnable closeHandler) {
+
+        if (useReferrer && target.contains("haveno.network")) {
+            // add utm parameters
+            target = appendURI(target, "utm_source=desktop-client&utm_medium=in-app-link&utm_campaign=language_" +
+                    preferences.getUserLanguage());
+        }
+
+        if (DontShowAgainLookup.showAgain(OPEN_WEB_PAGE_KEY)) {
+            final String finalTarget = target;
+            new Popup().nested().information(Res.get("guiUtil.openWebBrowser.warning", target))
+                    .actionButtonText(Res.get("guiUtil.openWebBrowser.doOpen"))
+                    .onAction(() -> {
+                        DontShowAgainLookup.dontShowAgain(OPEN_WEB_PAGE_KEY, true);
+                        doOpenWebPage(finalTarget);
+                    })
+                    .closeButtonText(Res.get("guiUtil.openWebBrowser.copyUrl"))
+                    .onClose(() -> {
+                        Utilities.copyToClipboard(finalTarget);
+                        if (closeHandler != null) {
+                            closeHandler.run();
+                        }
+                    })
+                    .show();
+        } else {
+            if (closeHandler != null) {
+                closeHandler.run();
+            }
+
+            doOpenWebPage(target);
+        }
+    }
+
+    private static String appendURI(String uri, String appendQuery) {
+        try {
+            final URI oldURI = new URI(uri);
+
+            String newQuery = oldURI.getQuery();
+
+            if (newQuery == null) {
+                newQuery = appendQuery;
+            } else {
+                newQuery += "&" + appendQuery;
+            }
+
+            URI newURI = new URI(oldURI.getScheme(), oldURI.getAuthority(), oldURI.getPath(),
+                    newQuery, oldURI.getFragment());
+
+            return newURI.toString();
+        } catch (URISyntaxException e) {
+            e.printStackTrace();
+            log.error(e.getMessage());
+
+            return uri;
+        }
+    }
+
+    private static void doOpenWebPage(String target) {
+        try {
+            Utilities.openURI(safeParse(target));
+        } catch (Exception e) {
+            e.printStackTrace();
+            log.error(e.getMessage());
+        }
+    }
+
+    private static URI safeParse(String url) throws URISyntaxException {
+        int hashIndex = url.indexOf('#');
+
+        if (hashIndex >= 0 && hashIndex < url.length() - 1) {
+            String base = url.substring(0, hashIndex);
+            String fragment = url.substring(hashIndex + 1);
+            String encodedFragment = URLEncoder.encode(fragment, StandardCharsets.UTF_8);
+            return new URI(base + "#" + encodedFragment);
+        }
+
+        return new URI(url); // no fragment
+    }
+
+    public static String getPercentageOfTradeAmount(BigInteger fee, BigInteger tradeAmount) {
+        String result = " (" + getPercentage(fee, tradeAmount) +
+                " " + Res.get("guiUtil.ofTradeAmount") + ")";
+
+        return result;
+    }
+
+    public static String getPercentage(BigInteger part, BigInteger total) {
+        return FormattingUtils.formatToPercentWithSymbol(HavenoUtils.divide(part, total));
+    }
+
+    public static <T> T getParentOfType(Node node, Class<T> t) {
+        Node parent = node.getParent();
+        while (parent != null) {
+            if (parent.getClass().isAssignableFrom(t)) {
+                break;
+            } else {
+                parent = parent.getParent();
+            }
+        }
+        return t.cast(parent);
+    }
+
+    public static void showZelleWarning() {
+        String key = "confirmZelleRequirements";
+        final String currencyName = Config.baseCurrencyNetwork().getCurrencyName();
+        new Popup().information(Res.get("payment.zelle.info", currencyName, currencyName))
+                .width(900)
+                .closeButtonText(Res.get("shared.iConfirm"))
+                .dontShowAgainId(key)
+                .show();
+    }
+
+    public static void showFasterPaymentsWarning(Navigation navigation) {
+        String key = "recreateFasterPaymentsAccount";
+        String currencyName = Config.baseCurrencyNetwork().getCurrencyName();
+        new Popup().information(Res.get("payment.fasterPayments.newRequirements.info", currencyName))
+                .width(900)
+                .actionButtonTextWithGoTo("mainView.menu.account")
+                .onAction(() -> {
+                    navigation.setReturnPath(navigation.getCurrentPath());
+                    navigation.navigateTo(MainView.class, AccountView.class, TraditionalAccountsView.class);
+                })
+                .dontShowAgainId(key)
+                .show();
+    }
+
+    public static String getMoneroURI(String address, BigInteger amount, String label) {
+        MoneroTxConfig txConfig = new MoneroTxConfig().setAddress(address);
+        if (amount != null) txConfig.setAmount(amount);
+        if (label != null && !label.isEmpty() && !disablePaymentUriLabel) txConfig.setNote(label);
+        return MoneroUtils.getPaymentUri(txConfig);
+    }
+
+    // A popup stealing window focus or a click on cancel fires focus-out on the edited field;
+    // skip validation then, since the user has not left the field or the input is discarded.
+    public static boolean skipFocusOutValidation(Node field, Node cancelButton, boolean oldValue, boolean newValue) {
+        if (!oldValue || newValue || field.getScene() == null) return false;
+        Window window = field.getScene().getWindow();
+        return (window != null && !window.isFocused())
+                || (cancelButton != null && field.getScene().getFocusOwner() == cancelButton);
+    }
+
+    public static boolean isBootstrappedOrShowPopup(P2PService p2PService) {
+        if (p2PService.isBootstrapped() && p2PService.getNumConnectedPeers().get() > 0) {
+            return true;
+        }
+        new Popup().information(Res.get("popup.warning.notFullyConnected")).show();
+        return false;
+    }
+
+    public static boolean isReadyForTxBroadcastOrShowPopup(XmrWalletService xmrWalletService) {
+        XmrConnectionService xmrConnectionService = xmrWalletService.getXmrConnectionService();
+        if (!xmrConnectionService.hasSufficientPeersForBroadcast()) {
+            new Popup().information(Res.get("popup.warning.notSufficientConnectionsToXmrNetwork", xmrConnectionService.getMinBroadcastConnections())).show();
+            return false;
+        }
+
+        if (!xmrConnectionService.isDownloadComplete()) {
+            new Popup().information(Res.get("popup.warning.downloadNotComplete")).show();
+            return false;
+        }
+
+        if (!isWalletSyncedWithinToleranceOrShowPopup(xmrWalletService)) {
+            return false;
+        }
+
+        try {
+            xmrConnectionService.verifyConnection();
+        } catch (Exception e) {
+            new Popup().information(e.getMessage()).show();
+            return false;
+        }
+
+        return true;
+    }
+
+    public static boolean isWalletSyncedWithinToleranceOrShowPopup(XmrWalletService xmrWalletService) {
+        if (!xmrWalletService.isSyncedWithinTolerance()) {
+            new Popup().information(Res.get("popup.warning.walletNotSynced")).show();
+            return false;
+        }
+        return true;
+    }
+
+    public static boolean canCreateOrTakeOfferOrShowPopup(User user, Navigation navigation) {
+
+        if (!user.hasAcceptedArbitrators()) {
+            log.warn("There are no arbitrators available");
+            new Popup().warning(Res.get("popup.warning.noArbitratorsAvailable")).show();
+            return false;
+        }
+
+        if (user.currentPaymentAccountProperty().get() == null) {
+            new Popup().headLine(Res.get("popup.warning.noTradingAccountSetup.headline"))
+                    .instruction(Res.get("popup.warning.noTradingAccountSetup.msg"))
+                    .actionButtonTextWithGoTo("mainView.menu.account")
+                    .onAction(() -> {
+                        navigation.setReturnPath(navigation.getCurrentPath());
+                        navigation.navigateTo(MainView.class, AccountView.class, TraditionalAccountsView.class);
+                    }).show();
+            return false;
+        }
+
+        return true;
+    }
+
+    public static void showWantToBurnBTCPopup(Coin miningFee, Coin amount, CoinFormatter btcFormatter) {
+        new Popup().warning(Res.get("popup.warning.burnXMR", btcFormatter.formatCoinWithCode(miningFee),
+                btcFormatter.formatCoinWithCode(amount))).show();
+    }
+
+    public static void requestFocus(Node node) {
+        UserThread.execute(node::requestFocus);
+    }
+
+    public static void rescanOutputs(Preferences preferences) {
+        try {
+            new Popup().information(Res.get("settings.net.rescanOutputsSuccess"))
+                    .actionButtonText(Res.get("shared.yes"))
+                    .onAction(() -> {
+                        throw new RuntimeException("Rescanning wallet outputs not yet implemented");
+                        //UserThread.runAfter(HavenoApp.getShutDownHandler(), 100, TimeUnit.MILLISECONDS);
+                    })
+                    .closeButtonText(Res.get("shared.cancel"))
+                    .show();
+        } catch (Throwable t) {
+            new Popup().error(Res.get("settings.net.rescanOutputsFailed", t)).show();
+        }
+    }
+
+    // apply the theme to a window's scene and follow theme toggles until the window hides
+    public static void loadWindowStyles(Stage stage, Preferences preferences, boolean devHeader) {
+        Scene scene = stage.getScene();
+        ChangeListener<Number> themeListener = (ov, o, n) -> {
+            CssTheme.loadSceneStyles(scene, n.intValue(), devHeader);
+            scene.setFill(CssTheme.isDarkTheme() ? Color.BLACK : Color.WHITE);
+        };
+        CssTheme.loadSceneStyles(scene, preferences.getCssTheme(), devHeader);
+        preferences.getCssThemeProperty().addListener(themeListener);
+        stage.addEventHandler(WindowEvent.WINDOW_HIDDEN, e -> preferences.getCssThemeProperty().removeListener(themeListener));
+    }
+
+    public static void showCenteredChatWindow(Stage stage, Scene rootScene) {
+        Window rootSceneWindow = rootScene.getWindow();
+        // use the screen containing the largest part of the application window
+        Rectangle2D screenBounds = Screen.getScreensForRectangle(rootSceneWindow.getX(), rootSceneWindow.getY(),
+                rootSceneWindow.getWidth(), rootSceneWindow.getHeight())
+                .stream().max(Comparator.comparingDouble(screen -> {
+                    Rectangle2D bounds = screen.getBounds();
+                    double width = Math.min(rootSceneWindow.getX() + rootSceneWindow.getWidth(), bounds.getMaxX())
+                            - Math.max(rootSceneWindow.getX(), bounds.getMinX());
+                    double height = Math.min(rootSceneWindow.getY() + rootSceneWindow.getHeight(), bounds.getMaxY())
+                            - Math.max(rootSceneWindow.getY(), bounds.getMinY());
+                    return Math.max(0, width) * Math.max(0, height);
+                })).orElse(Screen.getPrimary()).getVisualBounds();
+        double width = Math.min(Layout.CHAT_WINDOW_WIDTH, Math.min(rootScene.getWidth(), screenBounds.getWidth()));
+        double height = Math.min(Layout.CHAT_WINDOW_HEIGHT, Math.min(rootScene.getHeight(), screenBounds.getHeight()));
+        boolean linux = Utilities.isLinux();
+        // GTK needs a real resize after mapping before the opening minimum can be released
+        double openingWidth = linux ? width - 1 : width;
+        stage.setWidth(width);
+        stage.setHeight(height);
+        stage.setMinWidth(linux ? openingWidth : Layout.CHAT_WINDOW_MIN_WIDTH);
+        stage.setMinHeight(linux ? height : Layout.CHAT_WINDOW_MIN_HEIGHT);
+        // set the native window background before the first frame is rendered
+        stage.getScene().setFill(CssTheme.isDarkTheme() ? Color.BLACK : Color.WHITE);
+
+        // center each new chat over the current application window and keep it on-screen
+        double x = Math.round(rootSceneWindow.getX() + rootScene.getX() + (rootScene.getWidth() - width) / 2);
+        double y = Math.round(rootSceneWindow.getY() + rootScene.getY() + (rootScene.getHeight() - height) / 2);
+        stage.setX(Math.max(screenBounds.getMinX(), Math.min(x, screenBounds.getMaxX() - width)));
+        stage.setY(Math.max(screenBounds.getMinY(), Math.min(y, screenBounds.getMaxY() - height)));
+        // let the chat render before revealing the native window
+        stage.setOpacity(0);
+        stage.show();
+        new AnimationTimer() {
+            private int pulses;
+
+            @Override
+            public void handle(long now) {
+                if (!stage.isShowing()) {
+                    stop();
+                    return;
+                }
+                if (++pulses < 3) return;
+                stop();
+                stage.setOpacity(1);
+            }
+        }.start();
+        if (!linux) return;
+
+        PauseTransition settleDelay = new PauseTransition(Duration.millis(300));
+        ChangeListener<Number> boundsListener = (observable, oldValue, newValue) -> settleDelay.playFromStart();
+        EventHandler<WindowEvent> hiddenHandler = new EventHandler<>() {
+            @Override
+            public void handle(WindowEvent event) {
+                settleDelay.stop();
+                stage.widthProperty().removeListener(boundsListener);
+                stage.heightProperty().removeListener(boundsListener);
+                stage.removeEventHandler(WindowEvent.WINDOW_HIDDEN, this);
+                stage.setMinWidth(Layout.CHAT_WINDOW_MIN_WIDTH);
+                stage.setMinHeight(Layout.CHAT_WINDOW_MIN_HEIGHT);
+            }
+        };
+        settleDelay.setOnFinished(new EventHandler<>() {
+            private boolean openingSizeApplied;
+
+            @Override
+            public void handle(ActionEvent event) {
+                boolean restoreOpeningSize = !stage.isMaximized() && !stage.isFullScreen()
+                        && Math.abs(stage.getWidth() - width) <= 1 && Math.abs(stage.getHeight() - height) <= 1;
+                if (restoreOpeningSize && !openingSizeApplied) {
+                    openingSizeApplied = true;
+                    stage.setWidth(width);
+                    stage.setHeight(height);
+                    settleDelay.playFromStart();
+                    return;
+                }
+                stage.widthProperty().removeListener(boundsListener);
+                stage.heightProperty().removeListener(boundsListener);
+                stage.removeEventHandler(WindowEvent.WINDOW_HIDDEN, hiddenHandler);
+                stage.setMinWidth(Layout.CHAT_WINDOW_MIN_WIDTH);
+                stage.setMinHeight(Layout.CHAT_WINDOW_MIN_HEIGHT);
+                // leave any user resize or maximize in place
+                if (restoreOpeningSize) {
+                    stage.setWidth(width);
+                    stage.setHeight(height);
+                }
+            }
+        });
+        stage.widthProperty().addListener(boundsListener);
+        stage.heightProperty().addListener(boundsListener);
+        stage.addEventHandler(WindowEvent.WINDOW_HIDDEN, hiddenHandler);
+        settleDelay.play();
+    }
+
+    public static StringConverter<PaymentAccount> getPaymentAccountsComboBoxStringConverter() {
+        return new StringConverter<>() {
+            @Override
+            public String toString(PaymentAccount paymentAccount) {
+                if (paymentAccount.hasMultipleCurrencies()) {
+                    return paymentAccount.getAccountName() + " (" + Res.get(paymentAccount.getPaymentMethod().getId()) + ")";
+                } else {
+                    TradeCurrency singleTradeCurrency = paymentAccount.getSingleTradeCurrency();
+                    String prefix = singleTradeCurrency != null ? singleTradeCurrency.getCode() + ", " : "";
+                    return paymentAccount.getAccountName() + " (" + prefix +
+                            Res.get(paymentAccount.getPaymentMethod().getId()) + ")";
+                }
+            }
+
+            @Override
+            public PaymentAccount fromString(String s) {
+                return null;
+            }
+        };
+    }
+
+    public static Callback<ListView<PaymentAccount>, ListCell<PaymentAccount>> getPaymentAccountListCellFactory(
+            ComboBox<PaymentAccount> paymentAccountsComboBox,
+            AccountAgeWitnessService accountAgeWitnessService) {
+        return p -> new ListCell<>() {
+            @Override
+            protected void updateItem(PaymentAccount item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (item != null && !empty) {
+
+                    boolean needsSigning = PaymentMethod.hasChargebackRisk(item.getPaymentMethod(),
+                            item.getTradeCurrencies());
+
+                    InfoAutoTooltipLabel label = new InfoAutoTooltipLabel(
+                            paymentAccountsComboBox.getConverter().toString(item),
+                            ContentDisplay.RIGHT);
+
+                    if (needsSigning) {
+                        AccountAgeWitness myWitness = accountAgeWitnessService.getMyWitness(
+                                item.paymentAccountPayload);
+                        AccountAgeWitnessService.SignState signState =
+                                accountAgeWitnessService.getSignState(myWitness);
+                        String info = StringUtils.capitalize(signState.getDisplayString());
+
+                        MaterialDesignIcon icon = getIconForSignState(signState);
+
+                        label.setIcon(icon, info);
+                    }
+                    setGraphic(label);
+                } else {
+                    setGraphic(null);
+                }
+            }
+        };
+    }
+
+    public static void removeChildrenFromGridPaneRows(GridPane gridPane, int start, int end) {
+        Map<Integer, List<Node>> childByRowMap = new HashMap<>();
+        gridPane.getChildren().forEach(child -> {
+            final Integer rowIndex = GridPane.getRowIndex(child);
+            childByRowMap.computeIfAbsent(rowIndex, key -> new ArrayList<>());
+            childByRowMap.get(rowIndex).add(child);
+        });
+
+        for (int i = Math.min(start, childByRowMap.size()); i < Math.min(end + 1, childByRowMap.size()); i++) {
+            List<Node> nodes = childByRowMap.get(i);
+            if (nodes != null) {
+                nodes.stream()
+                        .filter(Objects::nonNull)
+                        .filter(node -> gridPane.getChildren().contains(node))
+                        .forEach(node -> gridPane.getChildren().remove(node));
+            }
+        }
+    }
+        public static void setFitToRowsForTableView(TableView<?> tableView,
+                                                int rowHeight,
+                                                int headerHeight,
+                                                int minNumRows,
+                                                int maxNumRows) {
+        int size = tableView.getItems().size();
+        int minHeight = rowHeight * minNumRows + headerHeight;
+        int maxHeight = rowHeight * maxNumRows + headerHeight;
+        checkArgument(maxHeight >= minHeight, "maxHeight cannot be smaller as minHeight");
+        int height = Math.min(maxHeight, Math.max(minHeight, size * rowHeight + headerHeight));
+
+        tableView.setPrefHeight(-1);
+        tableView.setVisible(false);
+        // We need to delay the setter to the next render frame as otherwise views don' get updated in some cases
+        // Not 100% clear what causes that issue, but seems the requestLayout method is not called otherwise.
+        // We still need to set the height immediately, otherwise some views render an incorrect layout.
+        tableView.setPrefHeight(height);
+
+        UserThread.execute(() -> {
+            tableView.setPrefHeight(height);
+            tableView.setVisible(true);
+        });
+    }
+
+    public static Tuple2<ComboBox<TradeCurrency>, Integer> addRegionCountryTradeCurrencyComboBoxes(GridPane gridPane,
+                                                                                                   int gridRow,
+                                                                                                   Consumer<Country> onCountrySelectedHandler,
+                                                                                                   Consumer<TradeCurrency> onTradeCurrencySelectedHandler) {
+        gridRow = addRegionCountry(gridPane, gridRow, onCountrySelectedHandler);
+
+        ComboBox<TradeCurrency> currencyComboBox = FormBuilder.addComboBox(gridPane, ++gridRow,
+                Res.get("shared.currency"));
+        currencyComboBox.setPromptText(Res.get("list.currency.select"));
+        currencyComboBox.setItems(FXCollections.observableArrayList(CurrencyUtil.getAllSortedTraditionalCurrencies()));
+
+        currencyComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(TradeCurrency currency) {
+                return currency.getNameAndCode();
+            }
+
+            @Override
+            public TradeCurrency fromString(String string) {
+                return null;
+            }
+        });
+        currencyComboBox.setDisable(true);
+
+        currencyComboBox.setOnAction(e ->
+                onTradeCurrencySelectedHandler.accept(currencyComboBox.getSelectionModel().getSelectedItem()));
+
+        return new Tuple2<>(currencyComboBox, gridRow);
+    }
+
+    public static int addRegionCountry(GridPane gridPane,
+                                       int gridRow,
+                                       Consumer<Country> onCountrySelectedHandler) {
+        Tuple3<Label, ComboBox<haveno.core.locale.Region>, ComboBox<Country>> tuple3 = addTopLabelComboBoxComboBox(gridPane, ++gridRow, Res.get("payment.country"));
+
+        ComboBox<haveno.core.locale.Region> regionComboBox = tuple3.second;
+        regionComboBox.setPromptText(Res.get("payment.select.region"));
+        regionComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(haveno.core.locale.Region region) {
+                return region.name;
+            }
+
+            @Override
+            public haveno.core.locale.Region fromString(String s) {
+                return null;
+            }
+        });
+        regionComboBox.setItems(FXCollections.observableArrayList(CountryUtil.getAllRegions()));
+
+        ComboBox<Country> countryComboBox = tuple3.third;
+        countryComboBox.setVisibleRowCount(15);
+        countryComboBox.setDisable(true);
+        countryComboBox.setPromptText(Res.get("payment.select.country"));
+        countryComboBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(Country country) {
+                return country.name + " (" + country.code + ")";
+            }
+
+            @Override
+            public Country fromString(String s) {
+                return null;
+            }
+        });
+
+        regionComboBox.setOnAction(e -> {
+            haveno.core.locale.Region selectedItem = regionComboBox.getSelectionModel().getSelectedItem();
+            if (selectedItem != null) {
+                countryComboBox.setDisable(false);
+                countryComboBox.setItems(FXCollections.observableArrayList(CountryUtil.getAllCountriesForRegion(selectedItem)));
+            }
+        });
+
+        countryComboBox.setOnAction(e ->
+                onCountrySelectedHandler.accept(countryComboBox.getSelectionModel().getSelectedItem()));
+
+        return gridRow;
+    }
+
+    @NotNull
+    public static <T> ListCell<T> getComboBoxButtonCell(String title, ComboBox<T> comboBox) {
+        return getComboBoxButtonCell(title, comboBox, true);
+    }
+
+    @NotNull
+    public static <T> ListCell<T> getComboBoxButtonCell(String title,
+                                                        ComboBox<T> comboBox,
+                                                        Boolean hideOriginalPrompt) {
+        return new ListCell<>() {
+            @Override
+            protected void updateItem(T item, boolean empty) {
+                super.updateItem(item, empty);
+
+                // See https://github.com/jfoenixadmin/JFoenix/issues/610
+                if (hideOriginalPrompt)
+                    this.setVisible(item != null || !empty);
+
+                if (empty || item == null) {
+                    setText(title);
+                } else {
+                    setText(comboBox.getConverter().toString(item));
+                }
+            }
+        };
+    }
+
+    public static MaterialDesignIcon getIconForSignState(AccountAgeWitnessService.SignState state) {
+        if (state.equals(AccountAgeWitnessService.SignState.PEER_INITIAL)) {
+            return MaterialDesignIcon.CLOCK;
+        }
+
+        return (state.equals(AccountAgeWitnessService.SignState.ARBITRATOR) ||
+                state.equals(AccountAgeWitnessService.SignState.PEER_SIGNER)) ?
+                MaterialDesignIcon.APPROVAL : MaterialDesignIcon.ALERT_CIRCLE_OUTLINE;
+    }
+
+    public static ScrollPane createScrollPane() {
+        ScrollPane scrollPane = new ScrollPane();
+        scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scrollPane.setFitToWidth(true);
+        scrollPane.setFitToHeight(true);
+        AnchorPane.setLeftAnchor(scrollPane, 0d);
+        AnchorPane.setTopAnchor(scrollPane, 0d);
+        AnchorPane.setRightAnchor(scrollPane, 0d);
+        AnchorPane.setBottomAnchor(scrollPane, 0d);
+        return scrollPane;
+    }
+
+    public static void setDefaultTwoColumnConstraintsForGridPane(GridPane gridPane) {
+        ColumnConstraints columnConstraints1 = new ColumnConstraints();
+        columnConstraints1.setHalignment(HPos.RIGHT);
+        columnConstraints1.setHgrow(Priority.NEVER);
+        columnConstraints1.setMinWidth(200);
+        ColumnConstraints columnConstraints2 = new ColumnConstraints();
+        columnConstraints2.setHgrow(Priority.ALWAYS);
+        gridPane.getColumnConstraints().addAll(columnConstraints1, columnConstraints2);
+    }
+
+    public static void applyFilledStyle(TextField textField) {
+        textField.textProperty().addListener((observable, oldValue, newValue) -> {
+            updateFilledStyle(textField);
+        });
+    }
+
+    private static void updateFilledStyle(TextField textField) {
+        if (textField.getText() != null && !textField.getText().isEmpty()) {
+            if (!textField.getStyleClass().contains("filled")) {
+                textField.getStyleClass().add("filled");
+            }
+        } else {
+            textField.getStyleClass().remove("filled");
+        }
+    }
+
+    public static void applyFilledStyle(ComboBox<?> comboBox) {
+        comboBox.valueProperty().addListener((observable, oldValue, newValue) -> {
+            updateFilledStyle(comboBox);
+        });
+    }
+    
+    private static void updateFilledStyle(ComboBox<?> comboBox) {
+        if (comboBox.getValue() != null) {
+            if (!comboBox.getStyleClass().contains("filled")) {
+                comboBox.getStyleClass().add("filled");
+            }
+        } else {
+            comboBox.getStyleClass().remove("filled");
+        }
+    }
+
+    private static final String CURSOR_REFRESH = "haveno.cursorRefresh";
+    private static Field mouseHandlerField, currCursorField, currCursorFrameField;
+    private static boolean cursorCacheUnavailable;
+
+    // A scene pushes the OS cursor only when it differs from its cached last-applied value, so resets by
+    // other windows/popups stick; clearing the cache on pointer entry and move forces a correcting re-push.
+    public static void syncCursorAcrossWindows() {
+        Window.getWindows().forEach(GUIUtil::installWindowCursorRefresh);
+        Window.getWindows().addListener((ListChangeListener<Window>) change -> {
+            while (change.next()) change.getAddedSubList().forEach(GUIUtil::installWindowCursorRefresh);
+        });
+    }
+
+    private static void installWindowCursorRefresh(Window window) {
+        if (window.getProperties().put(CURSOR_REFRESH, Boolean.TRUE) != null) return;
+        window.sceneProperty().addListener((obs, oldScene, scene) -> installSceneCursorRefresh(scene));
+        installSceneCursorRefresh(window.getScene());
+    }
+
+    private static void installSceneCursorRefresh(Scene scene) {
+        if (scene == null || scene.getProperties().put(CURSOR_REFRESH, Boolean.TRUE) != null) return;
+        scene.addEventFilter(MouseEvent.MOUSE_ENTERED_TARGET, e -> clearAppliedCursorCache(scene));
+        scene.addEventFilter(MouseEvent.MOUSE_MOVED, e -> clearAppliedCursorCache(scene));
+    }
+
+    // Nulls Scene.mouseHandler.currCursor(Frame) so the running mouse event's tail cursor update
+    // re-applies the resolved cursor natively. Needs --add-opens javafx.graphics/javafx.scene.
+    private static void clearAppliedCursorCache(Scene scene) {
+        if (cursorCacheUnavailable) return;
+        try {
+            if (mouseHandlerField == null) {
+                mouseHandlerField = Scene.class.getDeclaredField("mouseHandler");
+                mouseHandlerField.setAccessible(true);
+            }
+            Object mouseHandler = mouseHandlerField.get(scene);
+            if (mouseHandler == null) return;
+            if (currCursorField == null) {
+                currCursorField = mouseHandler.getClass().getDeclaredField("currCursor");
+                currCursorField.setAccessible(true);
+                currCursorFrameField = mouseHandler.getClass().getDeclaredField("currCursorFrame");
+                currCursorFrameField.setAccessible(true);
+            }
+            currCursorField.set(mouseHandler, null);
+            currCursorFrameField.set(mouseHandler, null);
+        } catch (Exception e) {
+            cursorCacheUnavailable = true;
+            log.warn("Cannot clear the scene cursor cache, windows may keep a stale cursor", e);
+        }
+    }
+
+    /** Show a no-match placeholder while a non-empty filter hides all rows of a non-empty list. */
+    public static void updateFilterPlaceholder(TableView<?> tableView, FilteredList<?> filteredList, String filterString) {
+        updateFilterPlaceholder(tableView, !filterString.isEmpty() && filteredList.isEmpty() && !filteredList.getSource().isEmpty());
+    }
+
+    /** Overload for views that determine externally whether the filter hides all rows. */
+    public static void updateFilterPlaceholder(TableView<?> tableView, boolean showNoMatch) {
+        Map<Object, Object> props = tableView.getProperties();
+        Node noMatch = (Node) props.computeIfAbsent("filterNoMatchPlaceholder", k -> new AutoTooltipLabel(Res.get("table.placeholder.noFilterMatch")));
+        if (showNoMatch && tableView.getPlaceholder() != noMatch) {
+            props.put("filterDefaultPlaceholder", tableView.getPlaceholder());
+            tableView.setPlaceholder(noMatch);
+        } else if (!showNoMatch && tableView.getPlaceholder() == noMatch) {
+            tableView.setPlaceholder((Node) props.get("filterDefaultPlaceholder"));
+        }
+    }
+
+    public static void applyTableStyle(TableView<?> tableView) {
+        applyTableStyle(tableView, true);
+    }
+
+    public static void applyTableStyle(TableView<?> tableView, boolean applyRoundedArc) {
+        if (applyRoundedArc) applyRoundedArc(tableView);
+        applyEdgeColumnStyleClasses(tableView);
+    }
+
+    // scrolls a constrained-resize table horizontally in its wrapping scroll pane on narrow windows: the table's min
+    // width follows the sum of visible column min widths, so the pane pans header and rows together instead of clipping
+    public static <T> void applyTableHorizontalScroll(ScrollPane scrollPane, TableView<T> tableView) {
+        AtomicReference<ScrollBar> verticalBar = new AtomicReference<>();
+        InvalidationListener updater = obs -> {
+            ScrollBar bar = verticalBar.get();
+            double scrollbarWidth = bar != null && bar.isVisible() ? bar.getWidth() : 0;
+            double oldMinWidth = tableView.getMinWidth();
+            tableView.setMinWidth(
+                    tableView.getItems() == null || tableView.getItems().isEmpty() ? 0 :
+                            tableView.getColumns().stream()
+                                    .filter(TableColumn::isVisible)
+                                    .mapToDouble(TableColumn::getMinWidth)
+                                    .sum() + scrollbarWidth + tableView.snappedLeftInset() + tableView.snappedRightInset());
+            // min width changes during the table's layout do not reliably reach the pane skin;
+            // force a pane layout pass when columns or the vertical scrollbar change the required width
+            if (tableView.getMinWidth() != oldMinWidth) UserThread.execute(() -> {
+                if (tableView.getParent() != null) tableView.getParent().requestLayout();
+                scrollPane.requestLayout();
+                scrollPane.layout();
+            });
+        };
+        for (TableColumn<T, ?> column : tableView.getColumns()) {
+            column.visibleProperty().addListener(updater);
+            column.minWidthProperty().addListener(updater);
+        }
+        tableView.insetsProperty().addListener(updater);
+
+        // follow rows across items list swaps; change listeners cannot be used here because they
+        // are suppressed when an empty items list is replaced by another empty list
+        ListChangeListener<T> rowListener = change -> updater.invalidated(null);
+        AtomicReference<ObservableList<T>> wiredItems = new AtomicReference<>();
+        InvalidationListener itemsSwapListener = obs -> {
+            ObservableList<T> items = tableView.getItems();
+            ObservableList<T> wired = wiredItems.getAndSet(items);
+            if (wired != items) {
+                if (wired != null) wired.removeListener(rowListener);
+                if (items != null) items.addListener(rowListener);
+            }
+            updater.invalidated(null);
+        };
+        tableView.itemsProperty().addListener(itemsSwapListener);
+        itemsSwapListener.invalidated(null);
+
+        // the constrained resize policy skips tables at their min width, leaving columns at stale
+        // stretched widths that clip the trailing ones; squeeze them to their mins explicitly
+        tableView.widthProperty().addListener((observable, oldWidth, newWidth) -> {
+            if (newWidth.doubleValue() <= tableView.getMinWidth()) {
+                TableView.ResizeFeatures<T> features = new TableView.ResizeFeatures<>(tableView, null, 0.0);
+                for (TableColumn<T, ?> column : tableView.getVisibleLeafColumns()) {
+                    features.setColumnWidth(column, column.getMinWidth());
+                }
+            }
+        });
+
+        // route horizontal scroll deltas to the scroll pane; the table consumes scroll events but cannot pan sideways
+        scrollPane.addEventFilter(ScrollEvent.SCROLL, event -> {
+            if (Math.abs(event.getDeltaX()) <= Math.abs(event.getDeltaY())) return;
+            double scrollable = tableView.getWidth() - scrollPane.getViewportBounds().getWidth();
+            if (scrollable <= 0) return;
+            double delta = event.getDeltaX() * (scrollPane.getHmax() - scrollPane.getHmin()) / scrollable;
+            scrollPane.setHvalue(Math.max(scrollPane.getHmin(),
+                    Math.min(scrollPane.getHmax(), scrollPane.getHvalue() - delta)));
+            event.consume();
+        });
+
+        // keep the table's vertical bar at the viewport edge instead of panning off screen with the table
+        InvalidationListener vbarPinner = obs -> {
+            double scrollable = tableView.getWidth() - scrollPane.getViewportBounds().getWidth();
+            double range = scrollPane.getHmax() - scrollPane.getHmin();
+            double shift = scrollable <= 0 || range <= 0 ? 0 :
+                    -(scrollPane.getHmax() - scrollPane.getHvalue()) / range * scrollable;
+            for (Node node : tableView.lookupAll(".scroll-bar")) {
+                if (node instanceof ScrollBar bar && bar.getOrientation() == Orientation.VERTICAL) bar.setTranslateX(shift);
+            }
+        };
+        scrollPane.hvalueProperty().addListener(vbarPinner);
+        scrollPane.viewportBoundsProperty().addListener(vbarPinner);
+        tableView.widthProperty().addListener(vbarPinner);
+
+        // reserve the vertical bar's lane even at the table's min width, and follow skin replacements
+        InvalidationListener skinListener = obs -> {
+            ScrollBar oldBar = verticalBar.getAndSet(null);
+            if (oldBar != null) {
+                oldBar.visibleProperty().removeListener(updater);
+                oldBar.widthProperty().removeListener(updater);
+            }
+            for (Node node : tableView.lookupAll(".scroll-bar")) {
+                if (node instanceof ScrollBar bar && bar.getOrientation() == Orientation.VERTICAL) {
+                    verticalBar.set(bar);
+                    bar.visibleProperty().addListener(updater);
+                    bar.widthProperty().addListener(updater);
+                    break;
+                }
+            }
+            updater.invalidated(null);
+            vbarPinner.invalidated(null);
+        };
+        tableView.skinProperty().addListener(skinListener);
+        skinListener.invalidated(null);
+    }
+
+    private static void applyRoundedArc(TableView<?> tableView) {
+        Rectangle clip = new Rectangle();
+        clip.setArcWidth(Layout.ROUNDED_ARC);
+        clip.setArcHeight(Layout.ROUNDED_ARC);
+        tableView.setClip(clip);
+        tableView.layoutBoundsProperty().addListener((obs, oldVal, newVal) -> {
+            clip.setWidth(newVal.getWidth());
+            clip.setHeight(newVal.getHeight());
+        });
+    }
+
+    // side indentation carried by the edge columns' css padding (.first-column/.last-column)
+    private static final double EDGE_COLUMN_PADDING = 15;
+    // avatar columns center their content with inherent slack, so their edges need less
+    private static final double AVATAR_EDGE_COLUMN_PADDING = 5;
+    private static final String EDGE_COLUMN_BASE_WIDTH = "edgeColumnBaseWidth";
+
+    private static <T> void applyEdgeColumnStyleClasses(TableView<T> tableView) {
+        InvalidationListener updateListener = obs -> updateEdgeColumnStyleClasses(tableView);
+        for (TableColumn<T, ?> col : tableView.getColumns()) {
+            col.visibleProperty().addListener(updateListener);
+            col.getStyleClass().addListener(updateListener); // views may tag avatar-column after table styling
+        }
+        tableView.getColumns().addListener((ListChangeListener<TableColumn<T, ?>>) change -> {
+            while (change.next()) {
+                for (TableColumn<T, ?> col : change.getRemoved()) {
+                    col.visibleProperty().removeListener(updateListener);
+                    col.getStyleClass().removeListener(updateListener);
+                }
+                for (TableColumn<T, ?> col : change.getAddedSubList()) {
+                    col.visibleProperty().addListener(updateListener);
+                    col.getStyleClass().addListener(updateListener);
+                }
+            }
+            updateEdgeColumnStyleClasses(tableView);
+        });
+        updateEdgeColumnStyleClasses(tableView);
+    }
+
+    private static <T> void updateEdgeColumnStyleClasses(TableView<T> tableView) {
+        TableColumn<T, ?> first = null;
+        TableColumn<T, ?> last = null;
+        for (TableColumn<T, ?> col : tableView.getColumns()) {
+            if (!col.isVisible()) continue;
+            if (first == null) first = col;
+            last = col;
+        }
+        for (TableColumn<T, ?> col : tableView.getColumns()) {
+            setEdgeColumnClass(col, "first-column", col == first);
+            setEdgeColumnClass(col, "last-column", col == last);
+            updateEdgeColumnWidth(col);
+        }
+    }
+
+    private static void setEdgeColumnClass(TableColumn<?, ?> column, String styleClass, boolean apply) {
+        boolean applied = column.getStyleClass().contains(styleClass);
+        if (apply && !applied) column.getStyleClass().add(styleClass);
+        else if (!apply && applied) column.getStyleClass().remove(styleClass);
+    }
+
+    public static void setFixedColumnWidth(TableColumn<?, ?> column, double width) {
+        column.getProperties().put(EDGE_COLUMN_BASE_WIDTH, width);
+        updateEdgeColumnWidth(column);
+    }
+
+    // fixed-width edge columns widen by the css padding so their content area is unchanged
+    private static void updateEdgeColumnWidth(TableColumn<?, ?> column) {
+        int pads = (column.getStyleClass().contains("first-column") ? 1 : 0) +
+                (column.getStyleClass().contains("last-column") ? 1 : 0);
+        Double base = (Double) column.getProperties().get(EDGE_COLUMN_BASE_WIDTH);
+        if (base == null) {
+            if (pads == 0 || column.getMinWidth() != column.getMaxWidth()) return;
+            base = column.getMinWidth();
+            column.getProperties().put(EDGE_COLUMN_BASE_WIDTH, base);
+        }
+        double padding = column.getStyleClass().contains("avatar-column") ? AVATAR_EDGE_COLUMN_PADDING : EDGE_COLUMN_PADDING;
+        column.setMinWidth(base + pads * padding);
+        column.setMaxWidth(base + pads * padding);
+        if (pads == 0) column.getProperties().remove(EDGE_COLUMN_BASE_WIDTH);
+    }
+
+    private static final double CURRENCY_LOGO_DEFAULT_SIZE = 24; // currency logo size (px) outside list rows
+
+    private static ImageView getCurrencyImageView(String currencyCode) {
+        return getCurrencyImageView(currencyCode, CURRENCY_LOGO_DEFAULT_SIZE);
+    }
+
+    // crypto logos decoded once per device-pixel size and shared across icons; concurrent for the background pre-warm
+    private static final Map<String, Image> currencyImageCache = new ConcurrentHashMap<>();
+    private static final Set<String> currencyImageMisses = ConcurrentHashMap.newKeySet(); // codes without a decodable logo
+
+    // Pre-decode all crypto logos at the sizes lists use, off the FX thread (safe while the images are
+    // unattached), so pulldowns render from cache instead of stalling on PNG decodes, whose inflate cost
+    // is O(native pixels) no matter how small the target.
+    public static void warmCurrencyIconCache() {
+        double scale = Screen.getPrimary().getOutputScaleX();
+        Thread warmer = new Thread(() -> {
+            try {
+                for (CryptoCurrency currency : CurrencyUtil.getAllSortedCryptoCurrencies()) {
+                    getCurrencyImage(currency.getCode(), currencyIconBoxPx(CURRENCY_GRAPHIC_ROW_SIZE, scale), currencyIconMarginPx(scale));
+                    getCurrencyImage(currency.getCode(), Math.ceil(CURRENCY_LOGO_DEFAULT_SIZE * scale));
+                }
+            } catch (Exception e) {
+                log.warn("Error pre-warming currency icon cache: {}", e.getMessage());
+            }
+        }, "currency-icon-warmer");
+        warmer.setDaemon(true);
+        warmer.start();
+    }
+
+    private static ImageView getCurrencyImageView(String currencyCode, double size) {
+        if (currencyCode == null) return null;
+        String imageId = getImageId(currencyCode);
+        if (imageId == null) return null;
+        ImageView icon = new ImageView();
+        icon.setFitWidth(size);
+        icon.setPreserveRatio(true);
+        icon.setSmooth(true);
+
+        // decode crypto logos at device-pixel size for crisp HiDPI downscaling; fall back to CSS-supplied image
+        Image image = getCurrencyImage(currencyCode, Math.ceil(size * Screen.getPrimary().getOutputScaleX()));
+        if (image != null) icon.setImage(image);
+        else icon.setId(imageId);
+        return icon;
+    }
+
+    private static Image getCurrencyImage(String currencyCode, double px) {
+        return getCurrencyImage(currencyCode, (int) px, 0);
+    }
+
+    // decode the logo at native size (decoding at target size instead would flat-cut the right/bottom
+    // edge AA), then area-average it into a transparent box inset by a margin so the antialiased edge
+    // never snaps against the icon bounds and looks clipped
+    private static Image getCurrencyImage(String currencyCode, int boxPx, int marginPx) {
+        if (!CurrencyUtil.isCryptoCurrency(currencyCode)) return null;
+        String code = currencyCode.toLowerCase();
+        if (currencyImageMisses.contains(code)) return null; // avoid re-probing the classpath per cell update
+        Image image = currencyImageCache.computeIfAbsent(code + "@" + boxPx + "+" + marginPx, k -> {
+            try (InputStream in = GUIUtil.class.getResourceAsStream("/images/" + code + "_logo.png")) {
+                if (in == null) return null;
+                Image logo = new Image(in);
+                return logo.isError() ? null : downscaleCentered(logo, boxPx, marginPx);
+            } catch (IOException e) {
+                return null;
+            }
+        });
+        if (image == null) currencyImageMisses.add(code);
+        return image;
+    }
+
+    // area-averaged downscale of src centered in a transparent boxPx square, inset by marginPx per side
+    private static Image downscaleCentered(Image src, int boxPx, int marginPx) {
+        int sw = (int) src.getWidth(), sh = (int) src.getHeight();
+        int contentPx = Math.max(1, boxPx - 2 * marginPx);
+        double scale = Math.min(1, Math.min(contentPx / (double) sw, contentPx / (double) sh));
+        int dw = Math.max(1, (int) Math.round(sw * scale)), dh = Math.max(1, (int) Math.round(sh * scale));
+        int[] pixels = new int[sw * sh];
+        src.getPixelReader().getPixels(0, 0, sw, sh, PixelFormat.getIntArgbInstance(), pixels, 0, sw);
+        WritableImage out = new WritableImage(boxPx, boxPx);
+        PixelWriter writer = out.getPixelWriter();
+        int ox = (boxPx - dw) / 2, oy = (boxPx - dh) / 2;
+        double xr = sw / (double) dw, yr = sh / (double) dh;
+        for (int y = 0; y < dh; y++) {
+            double sy0 = y * yr, sy1 = Math.min(sh, sy0 + yr);
+            for (int x = 0; x < dw; x++) {
+                double sx0 = x * xr, sx1 = Math.min(sw, sx0 + xr);
+                double a = 0, r = 0, g = 0, b = 0, area = 0;
+                for (int sy = (int) sy0; sy < sy1; sy++) {
+                    double wy = Math.min(sy + 1, sy1) - Math.max(sy, sy0);
+                    for (int sx = (int) sx0; sx < sx1; sx++) {
+                        double w = (Math.min(sx + 1, sx1) - Math.max(sx, sx0)) * wy;
+                        int argb = pixels[sy * sw + sx];
+                        double wa = (argb >>> 24) * w;
+                        a += wa;
+                        r += ((argb >> 16) & 0xFF) * wa;
+                        g += ((argb >> 8) & 0xFF) * wa;
+                        b += (argb & 0xFF) * wa;
+                        area += w;
+                    }
+                }
+                int alpha = (int) Math.round(a / area);
+                writer.setArgb(ox + x, oy + y, alpha == 0 ? 0 : (alpha << 24)
+                        | ((int) Math.round(r / a) << 16) | ((int) Math.round(g / a) << 8) | (int) Math.round(b / a));
+            }
+        }
+        return out;
+    }
+
+    // PNG pixel dimensions read from the IHDR header, avoiding a full decode
+    private static int[] pngSize(String resourcePath) {
+        try (InputStream in = GUIUtil.class.getResourceAsStream(resourcePath)) {
+            if (in == null) return null;
+            byte[] h = in.readNBytes(24);
+            if (h.length < 24) return null;
+            int w = ((h[16] & 0xff) << 24) | ((h[17] & 0xff) << 16) | ((h[18] & 0xff) << 8) | (h[19] & 0xff);
+            int ht = ((h[20] & 0xff) << 24) | ((h[21] & 0xff) << 16) | ((h[22] & 0xff) << 8) | (h[23] & 0xff);
+            return w > 0 && ht > 0 ? new int[]{w, ht} : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    // branding logos decoded once per theme + device-pixel size (never above native), kept in sync with the theme
+    private static final Map<String, Image> brandingImageCache = new HashMap<>();
+
+    // Render a branding logo crisply on HiDPI: decode the theme's PNG at device-pixel size, capped at the
+    // source so it is never upscaled, and swap it on theme toggle. Pass the fixed dimension in fitWidth or
+    // fitHeight and 0 for the other. The CSS id drives the logo only if a PNG can't be decoded.
+    public static void setBrandingLogo(ImageView logo, Preferences preferences, String lightPath, String darkPath, double fitWidth, double fitHeight) {
+        double scale = Screen.getPrimary().getOutputScaleX();
+        double pxW = fitWidth <= 0 ? 0 : Math.ceil(fitWidth * scale);
+        double pxH = fitHeight <= 0 ? 0 : Math.ceil(fitHeight * scale);
+        ChangeListener<Number> themeListener = (ov, o, n) -> updateBrandingLogo(logo, n.intValue() == 1 ? darkPath : lightPath, pxW, pxH);
+        updateBrandingLogo(logo, preferences.getCssTheme() == 1 ? darkPath : lightPath, pxW, pxH);
+
+        // replace any previous branding listener so the same view can be repointed at other assets or sizes
+        @SuppressWarnings("unchecked")
+        ChangeListener<Number> prevListener = (ChangeListener<Number>) logo.getProperties().get("brandingThemeListenerWeak");
+        if (prevListener != null) preferences.getCssThemeProperty().removeListener(prevListener);
+
+        // weak listener (strong ref held on the ImageView) lets the logo be GC'd with its scene without leaking
+        WeakChangeListener<Number> weakListener = new WeakChangeListener<>(themeListener);
+        logo.getProperties().put("brandingThemeListener", themeListener);
+        logo.getProperties().put("brandingThemeListenerWeak", weakListener);
+        preferences.getCssThemeProperty().addListener(weakListener);
+    }
+
+    private static void updateBrandingLogo(ImageView logo, String resourcePath, double pxW, double pxH) {
+        Image image = brandingImageCache.computeIfAbsent(resourcePath + "@" + (int) pxW + "x" + (int) pxH, k -> {
+            int[] source = pngSize(resourcePath);
+            double w = source != null && pxW > source[0] ? source[0] : pxW;
+            double h = source != null && pxH > source[1] ? source[1] : pxH;
+            try (InputStream in = GUIUtil.class.getResourceAsStream(resourcePath)) {
+                if (in == null) return null;
+                Image img = new Image(in, w, h, true, true);
+                return img.isError() ? null : img;
+            } catch (IOException e) {
+                return null;
+            }
+        });
+        // drop the CSS id once decoded so the native-size -fx-image is never also loaded
+        if (image != null) {
+            logo.setImage(image);
+            logo.setId(null);
+        }
+    }
+
+    public static StackPane getCurrencyIcon(String currencyCode) {
+        ImageView icon = getCurrencyImageView(currencyCode);
+        return icon == null ? null : new StackPane(icon);
+    }
+
+    public static final double CURRENCY_GRAPHIC_ROW_SIZE = 25; // currency logo size (px) in list rows; adjust to resize
+    private static final double CURRENCY_LABEL_SMALL_WIDTH = 45; // .currency-label-small -fx-pref-width
+    private static final double CURRENCY_ICON_MARGIN = 1; // transparent margin (logical px) bled just outside list logos
+
+    public static Node getCurrencyGraphic(String currencyCode, double size) {
+        if (currencyCode == null) return null;
+        if (CurrencyUtil.isFiatCurrency(currencyCode)) return getFiatCurrencyBadge(currencyCode, size);
+        return getCurrencyIcon(currencyCode, size);
+    }
+
+    private static Node getFiatCurrencyBadge(String currencyCode, double size) {
+        String symbol;
+        try {
+            symbol = Currency.getInstance(currencyCode).getSymbol(GlobalSettings.getLocale());
+        } catch (Exception e) {
+            symbol = currencyCode;
+        }
+        if (symbol == null || symbol.isEmpty()) symbol = currencyCode;
+        if (symbol.length() > 3) symbol = symbol.substring(0, 3);
+
+        Label label = new Label(symbol);
+        label.getStyleClass().add("fiat-currency-symbol");
+        double fontSize = symbol.length() >= 3 ? size * 0.34 : symbol.length() == 2 ? size * 0.5 : size * 0.72;
+        label.setStyle("-fx-font-size: " + fontSize + "px;");
+
+        StackPane badge = new StackPane(label);
+        badge.getStyleClass().add("fiat-currency-badge");
+        badge.setMinSize(size, size);
+        badge.setPrefSize(size, size);
+        badge.setMaxSize(size, size);
+        return badge;
+    }
+
+    public static StackPane getCurrencyIcon(String currencyCode, double size) {
+        ImageView icon = getCurrencyIconImageView(currencyCode, size);
+        if (icon == null) return null;
+        StackPane pane = new StackPane(icon);
+        pane.setMinSize(size, size);
+        pane.setPrefSize(size, size);
+        pane.setMaxSize(size, size);
+        return pane;
+    }
+
+    // list icon: the logo fills `size` while its transparent anti-clip margin bleeds just outside those
+    // bounds (the oversized ImageView overflows the size-clamped StackPane), so the full-bleed logo
+    // renders at full size yet its antialiased edge is never clipped
+    private static ImageView getCurrencyIconImageView(String currencyCode, double size) {
+        if (currencyCode == null) return null;
+        String imageId = getImageId(currencyCode);
+        if (imageId == null) return null;
+        double box = size + 2 * CURRENCY_ICON_MARGIN; // margin bleeds outside `size` instead of shrinking the logo
+        ImageView icon = new ImageView();
+        icon.setFitWidth(box);
+        icon.setFitHeight(box);
+        icon.setPreserveRatio(true);
+        icon.setSmooth(true);
+        double scale = Screen.getPrimary().getOutputScaleX();
+        Image image = getCurrencyImage(currencyCode, currencyIconBoxPx(size, scale), currencyIconMarginPx(scale));
+        if (image != null) icon.setImage(image);
+        else icon.setId(imageId);
+        return icon;
+    }
+
+    // device-pixel box and margin for a list icon; shared with the cache pre-warm so keys always match
+    private static int currencyIconBoxPx(double size, double scale) {
+        return (int) Math.ceil((size + 2 * CURRENCY_ICON_MARGIN) * scale);
+    }
+
+    private static int currencyIconMarginPx(double scale) {
+        return (int) Math.ceil(CURRENCY_ICON_MARGIN * scale);
+    }
+
+    public static StackPane getCurrencyIconWithBorder(String currencyCode) {
+        return getCurrencyIconWithBorder(currencyCode, 25, 1);
+    }
+
+    public static StackPane getCurrencyIconWithBorder(String currencyCode, double size, double borderWidth) {
+        if (currencyCode == null) return null;
+
+        ImageView icon = getCurrencyImageView(currencyCode, size);
+        icon.setFitWidth(size - 2 * borderWidth);
+        icon.setFitHeight(size - 2 * borderWidth);
+
+        StackPane circleWrapper = new StackPane(icon);
+        circleWrapper.setPrefSize(size, size);
+        circleWrapper.setMaxSize(size, size);
+        circleWrapper.setMinSize(size, size);
+
+        circleWrapper.setStyle(
+            "-fx-background-color: white;" +
+            "-fx-background-radius: 50%;" +
+            "-fx-border-radius: 50%;" +
+            "-fx-border-color: white;" +
+            "-fx-border-width: " + borderWidth + "px;"
+        );
+
+        StackPane.setAlignment(icon, Pos.CENTER);
+
+        return circleWrapper;
+    }
+
+    private static String getImageId(String currencyCode) {
+        if (currencyCode == null) return null;
+        if (CurrencyUtil.isCryptoCurrency(currencyCode)) return "image-" + currencyCode.toLowerCase() + "-logo";
+        if (CurrencyUtil.isFiatCurrency(currencyCode)) return "image-fiat-logo";
+        return null;
+    }
+
+    private static final PseudoClass CAPPED = PseudoClass.getPseudoClass("capped");
+
+    public static void adjustHeightAutomatically(TextArea textArea) {
+        adjustHeightAutomatically(textArea, null);
+    }
+
+    public static void adjustHeightAutomatically(TextArea textArea, Double maxHeight) {
+        adjustHeightAutomatically(textArea, maxHeight, true);
+    }
+
+    public static void adjustHeightAutomatically(TextArea textArea, Double maxHeight, boolean loadSceneStyles) {
+        adjustHeightAutomatically(textArea, maxHeight, loadSceneStyles, null);
+    }
+
+    public static void adjustHeightAutomatically(TextArea textArea, Double maxHeight, boolean loadSceneStyles, Double extraHeight) {
+        if (maxHeight != null) textArea.prefHeightProperty().addListener((o, oldHeight, newHeight) ->
+                textArea.pseudoClassStateChanged(CAPPED, newHeight.doubleValue() >= maxHeight));
+        textArea.sceneProperty().addListener((o, oldScene, newScene) -> {
+            if (newScene != null) {
+                // avoid javafx css warning
+                if (loadSceneStyles) CssTheme.loadSceneStyles(newScene, CssTheme.getCurrentTheme(), false);
+                textArea.applyCss();
+                var text = textArea.lookup(".text");
+
+                textArea.prefHeightProperty().bind(Bindings.createDoubleBinding(() -> {
+                    Insets padding = textArea.getInsets();
+                    double topBottomPadding = padding.getTop() + padding.getBottom();
+                    double prefHeight = (extraHeight == null ? textArea.getFont().getSize() : extraHeight) +
+                            text.getBoundsInLocal().getHeight() + topBottomPadding;
+                    return maxHeight == null ? prefHeight : Math.min(prefHeight, maxHeight);
+                }, text.boundsInLocalProperty()));
+
+                text.boundsInLocalProperty().addListener((observableBoundsAfter, boundsBefore, boundsAfter) -> {
+                    Platform.runLater(() -> textArea.requestLayout());
+                });
+            }
+        });
+    }
+
+    public static Label getLockLabel() {
+        MaterialDesignIconView lockIcon = new MaterialDesignIconView(MaterialDesignIcon.LOCK, "16px");
+        lockIcon.setFill(Color.WHITE);
+        Accessibility.mute(lockIcon);
+        Label lockLabel = new Label();
+        lockLabel.setGraphic(lockIcon);
+        Accessibility.asText(lockLabel, Res.get("shared.privateOffer"));
+        return lockLabel;
+    }
+
+    public static MaterialDesignIconView getLockIcon(String glyphSize) {
+        MaterialDesignIconView lockIcon = new MaterialDesignIconView(MaterialDesignIcon.LOCK, glyphSize);
+        lockIcon.getStyleClass().add("lock-icon");
+        Accessibility.mute(lockIcon);
+        return lockIcon;
+    }
+
+    private static final double PRIVATE_OFFER_LOCK_ICON_OPACITY = 0.7;
+
+    public static void addPrivateOfferLockIcon(Label label) {
+        addPrivateOfferLockIcon(label, "1.231em", PRIVATE_OFFER_LOCK_ICON_OPACITY);
+    }
+
+    public static void addCompactPrivateOfferLockIcon(Label label) {
+        addPrivateOfferLockIcon(label, "1.2em", PRIVATE_OFFER_LOCK_ICON_OPACITY);
+    }
+
+    private static void addPrivateOfferLockIcon(Label label, String glyphSize, double opacity) {
+        MaterialDesignIconView lockIcon = getLockIcon(glyphSize);
+        lockIcon.setOpacity(opacity);
+        label.setGraphic(lockIcon);
+        label.setContentDisplay(ContentDisplay.RIGHT);
+        label.setGraphicTextGap(6);
+        Accessibility.setHelp(label, Res.get("shared.privateOffer"));
+    }
+
+    public static MaterialDesignIconView getCopyIcon() {
+        MaterialDesignIconView copyIcon = new MaterialDesignIconView(MaterialDesignIcon.CONTENT_COPY, "1.35em");
+        Accessibility.mute(copyIcon);
+        return copyIcon;
+    }
+
+    public static void configureCopyIcon(Labeled control, Supplier<String> contents) {
+        control.setGraphic(getCopyIcon());
+        Tooltip hover = new Tooltip(Res.get("shared.copyToClipboard"));
+        Tooltip feedback = new Tooltip(Res.get("shared.copiedToClipboard"));
+        control.setTooltip(hover);
+        PauseTransition timeout = new PauseTransition(Duration.seconds(1));
+        Runnable reset = () -> {
+            timeout.stop();
+            feedback.hide();
+            control.setTooltip(hover);
+        };
+        timeout.setOnFinished(event -> reset.run());
+        control.sceneProperty().addListener((observable, oldScene, newScene) -> reset.run());
+        Runnable copy = () -> {
+            String text = contents.get();
+            if (text == null || text.isEmpty()) return;
+            Utilities.copyToClipboard(text);
+            // anchor feedback to the glyph even when the copy label stretches to fit a field
+            Node graphic = control.getGraphic();
+            Bounds bounds = graphic.localToScreen(graphic.getBoundsInLocal());
+            if (bounds != null) {
+                control.setTooltip(null);
+                hover.hide();
+                feedback.show(control, bounds.getCenterX() + Layout.PADDING, bounds.getCenterY() + Layout.PADDING);
+                timeout.playFromStart();
+            }
+        };
+        if (control instanceof ButtonBase button) {
+            button.setAccessibleText(Res.get("shared.copyToClipboard"));
+            button.setOnAction(event -> copy.run());
+        } else {
+            control.setOnMouseClicked(event -> copy.run());
+            Accessibility.asButton(control, Res.get("shared.copyToClipboard"));
+        }
+    }
+
+    public static Tuple2<StackPane, ImageView> getSmallXmrQrCodePane() {
+        return getXmrQrCodePane(150, disablePaymentUriLabel ? 32 : 28, 2);
+    }
+
+    private static final int BIG_QR_CODE_SIZE = 250;
+
+    public static Tuple2<StackPane, ImageView> getBigXmrQrCodePane() {
+        return getBigXmrQrCodePane(BIG_QR_CODE_SIZE);
+    }
+
+    public static Tuple2<StackPane, ImageView> getBigXmrQrCodePane(int qrCodeSize) {
+        int baseLogoSize = disablePaymentUriLabel ? 47 : 45; // logo size at the default code size
+        int logoSize = (int) Math.round((double) baseLogoSize * qrCodeSize / BIG_QR_CODE_SIZE);
+        return getXmrQrCodePane(qrCodeSize, logoSize, 3);
+    }
+
+    /** Overlays a calendar icon on a text field which opens a date picker popup, writing the picked date as YYYY-MM-DD. */
+    public static StackPane wrapWithCalendarPicker(TextField field) {
+        // host the calendar in our own popup instead of the skin's, so its position is fully ours
+        DatePicker picker = new DatePicker();
+        Node calendar = new DatePickerSkin(picker).getPopupContent();
+        javafx.stage.Popup popup = new javafx.stage.Popup();
+        popup.setAutoHide(true);
+        popup.getContent().add(calendar);
+        popup.widthProperty().addListener((observable, oldValue, newValue) -> positionCalendarPopup(field, popup, calendar));
+        popup.heightProperty().addListener((observable, oldValue, newValue) -> positionCalendarPopup(field, popup, calendar));
+
+        picker.valueProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue != null) field.setText(newValue.toString());
+            popup.hide();
+        });
+        calendar.addEventHandler(MouseEvent.MOUSE_CLICKED, event -> { // also close on re-picking the selected day
+            for (Node node = event.getTarget() instanceof Node ? (Node) event.getTarget() : null; node != null; node = node.getParent()) {
+                if (node.getStyleClass().contains("day-cell")) {
+                    popup.hide();
+                    break;
+                }
+            }
+        });
+
+        Text icon = FormBuilder.getIcon(MaterialDesignIcon.CALENDAR, "1.2em");
+        icon.getStyleClass().add("calendar-picker-icon");
+        StackPane iconButton = new StackPane(icon);
+        iconButton.getStyleClass().add("calendar-picker-button");
+        iconButton.setCursor(Cursor.HAND);
+        iconButton.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        iconButton.setPadding(new Insets(4, 12, 4, 12));
+        StackPane.setAlignment(iconButton, Pos.CENTER_RIGHT);
+        iconButton.setOnMouseClicked(event -> {
+            try {
+                picker.setValue(LocalDate.parse(field.getText().trim()));
+            } catch (Exception e) {
+                picker.setValue(null);
+            }
+            popup.getScene().getStylesheets().setAll(field.getScene().getStylesheets()); // popup scenes do not inherit styles
+            popup.show(field, 0, 0);
+            positionCalendarPopup(field, popup, calendar);
+        });
+
+        StackPane pane = new StackPane(field, iconButton);
+        pane.setMaxWidth(field.getMaxWidth()); // size with the field
+        return pane;
+    }
+
+    // pin the calendar card's right edge under the field's calendar icon, kept inside the window; below the field, or
+    // above when there is no room. Positions by the card's bounds since the drop shadow inflates the popup window.
+    private static void positionCalendarPopup(TextField field, javafx.stage.Popup popup, Node calendar) {
+        if (!popup.isShowing() || field.getScene() == null) return;
+        Bounds fieldBounds = field.localToScreen(field.getLayoutBounds());
+        Bounds cardBounds = calendar.localToScreen(calendar.getLayoutBounds());
+        Window window = field.getScene().getWindow();
+        double cardY = fieldBounds.getMaxY() + 4;
+        if (cardY + cardBounds.getHeight() > window.getY() + window.getHeight() - 5)
+            cardY = fieldBounds.getMinY() - cardBounds.getHeight() - 4;
+        double cardX = Math.max(fieldBounds.getMaxX() - cardBounds.getWidth(), window.getX() + 5);
+        popup.setX(popup.getX() + cardX - cardBounds.getMinX());
+        popup.setY(popup.getY() + cardY - cardBounds.getMinY());
+    }
+
+    private static Tuple2<StackPane, ImageView> getXmrQrCodePane(int qrCodeSize, int logoSize, int logoBorderWidth) {
+        ImageView qrCodeImageView = new ImageView();
+        qrCodeImageView.setFitHeight(qrCodeSize);
+        qrCodeImageView.setFitWidth(qrCodeSize);
+        qrCodeImageView.getStyleClass().add("qr-code");
+
+        StackPane xmrLogo = GUIUtil.getCurrencyIconWithBorder(Res.getBaseCurrencyCode(), logoSize, logoBorderWidth);
+        StackPane qrCodePane = new StackPane(qrCodeImageView, xmrLogo);
+        qrCodePane.setCursor(Cursor.HAND);
+        qrCodePane.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+
+        // round the corners, with the shadow on a wrapper so the clip does not cut it off
+        Rectangle clip = new Rectangle(qrCodeSize, qrCodeSize);
+        clip.setArcWidth(Layout.ROUNDED_ARC);
+        clip.setArcHeight(Layout.ROUNDED_ARC);
+        qrCodePane.setClip(clip);
+        StackPane qrCodeWrapper = new StackPane(qrCodePane);
+        qrCodeWrapper.getStyleClass().add("qr-code-pane");
+        qrCodeWrapper.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+
+        return new Tuple2<>(qrCodeWrapper, qrCodeImageView);
+    }
+}

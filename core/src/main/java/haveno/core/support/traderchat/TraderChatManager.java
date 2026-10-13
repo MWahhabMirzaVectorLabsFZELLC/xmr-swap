@@ -1,0 +1,217 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.core.support.traderchat;
+
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
+import haveno.common.crypto.PubKeyRing;
+import haveno.common.crypto.PubKeyRingProvider;
+import haveno.core.api.CoreNotificationService;
+import haveno.core.api.XmrConnectionService;
+import haveno.core.locale.Res;
+import haveno.core.support.SupportManager;
+import haveno.core.support.SupportType;
+import haveno.core.support.messages.ChatMessage;
+import haveno.core.support.messages.SupportMessage;
+import haveno.core.trade.Trade;
+import haveno.core.trade.TradeManager;
+import haveno.core.xmr.wallet.XmrWalletService;
+import haveno.network.p2p.AckMessageSourceType;
+import haveno.network.p2p.BootstrapListener;
+import haveno.network.p2p.DecryptedMessageWithPubKey;
+import haveno.network.p2p.NodeAddress;
+import haveno.network.p2p.P2PService;
+import java.util.List;
+import java.util.Optional;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import lombok.extern.slf4j.Slf4j;
+
+import static com.google.common.base.Preconditions.checkArgument;
+
+@Slf4j
+@Singleton
+public class TraderChatManager extends SupportManager {
+    private final PubKeyRingProvider pubKeyRingProvider;
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Constructor
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Inject
+    public TraderChatManager(P2PService p2PService,
+                             XmrConnectionService xmrConnectionService,
+                             XmrWalletService xmrWalletService,
+                             CoreNotificationService notificationService,
+                             TradeManager tradeManager,
+                             PubKeyRingProvider pubKeyRingProvider) {
+        super(p2PService, xmrConnectionService, xmrWalletService, notificationService, tradeManager);
+        this.pubKeyRingProvider = pubKeyRingProvider;
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Implement template methods
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public SupportType getSupportType() {
+        return SupportType.TRADE;
+    }
+
+    @Override
+    public void requestPersistence() {
+        tradeManager.requestPersistence();
+    }
+
+    @Override
+    public void persistNow(Runnable completeHandler) {
+        tradeManager.persistNow(completeHandler);
+    }
+
+    @Override
+    public NodeAddress getPeerNodeAddress(ChatMessage message) {
+        return tradeManager.getOpenTrade(message.getTradeId()).map(trade -> {
+            checkArgument(!trade.isArbitrator(), "Arbitrators cannot use trader chat");
+            if (trade.getContract() != null) {
+                return trade.getContract().getPeersNodeAddress(pubKeyRingProvider.get());
+            } else {
+                return null;
+            }
+        }).orElse(null);
+    }
+
+    @Override
+    public PubKeyRing getPeerPubKeyRing(ChatMessage message) {
+        return tradeManager.getOpenTrade(message.getTradeId()).map(trade -> {
+            checkArgument(!trade.isArbitrator(), "Arbitrators cannot use trader chat");
+            if (trade.getContract() != null) {
+                return trade.getContract().getPeersPubKeyRing(pubKeyRingProvider.get());
+            } else {
+                return null;
+            }
+        }).orElse(null);
+    }
+
+    @Override
+    public List<ChatMessage> getAllChatMessages(String tradeId) {
+        return Optional.of(tradeManager.getTrade(tradeId)).map(Trade::getChatMessages)
+                .orElse(FXCollections.emptyObservableList());
+    }
+
+    @Override
+    public boolean channelOpen(ChatMessage message) {
+        return tradeManager.getOpenTrade(message.getTradeId()).isPresent();
+    }
+
+    @Override
+    public void addAndPersistChatMessage(ChatMessage message) {
+        tradeManager.getOpenTrade(message.getTradeId()).ifPresent(trade -> {
+            checkArgument(!trade.isArbitrator(), "Arbitrators cannot use trader chat");
+            ObservableList<ChatMessage> chatMessages = trade.getChatMessages();
+            if (chatMessages.stream().noneMatch(m -> m.getUid().equals(message.getUid()))) {
+                if (chatMessages.isEmpty()) {
+                    addSystemMsg(trade);
+                }
+                trade.addAndPersistChatMessage(message);
+                tradeManager.requestPersistence();
+            } else {
+                log.warn("Trade got a chatMessage that we have already stored. UId = {} TradeId = {}",
+                        message.getUid(), message.getTradeId());
+            }
+        });
+    }
+
+    @Override
+    protected AckMessageSourceType getAckMessageSourceType() {
+        return AckMessageSourceType.TRADE_CHAT_MESSAGE;
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // API
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    @Override
+    public void onAllServicesInitialized() {
+        super.onAllServicesInitialized();
+        
+        p2PService.addP2PServiceListener(new BootstrapListener() {
+            @Override
+            public void onDataReceived() {
+                tryApplyMessages();
+            }
+        });
+
+        xmrWalletService.downloadPercentageProperty().addListener((observable, oldValue, newValue) -> {
+            if (xmrWalletService.isSyncedWithinTolerance())
+                tryApplyMessages();
+        });
+
+        tryApplyMessages();
+    }
+
+    @Override
+    public void onSupportMessage(DecryptedMessageWithPubKey decryptedMessageWithPubKey, SupportMessage message) {
+        if (canProcessMessage(message)) {
+            try {
+                log.info("Received {} with tradeId {} and uid {}",
+                        message.getClass().getSimpleName(), message.getTradeId(), message.getUid());
+                super.onSupportMessage(decryptedMessageWithPubKey, message);
+                if (message instanceof ChatMessage) {
+                    Trade trade = tradeManager.getTrade(message.getTradeId());
+                    if (trade != null && trade.isArbitrator()) {
+                        log.warn("Discarding trader chat message for arbitrator. TradeId = {}, uid = {}", message.getTradeId(), message.getUid());
+                        mailboxMessageService.removeMailboxMsg(message);
+                        return;
+                    }
+                    if (trade != null && trade.isCompleted()) {
+                        log.info("Rejecting trader chat message for completed trade. TradeId = {}, uid = {}", message.getTradeId(), message.getUid());
+                        mailboxMessageService.removeMailboxMsg(message);
+                        sendAckMessage(message, trade.getVerifiedTradePeer(decryptedMessageWithPubKey).getPubKeyRing(), false, "Trade is already completed");
+                        return;
+                    }
+                    handle((ChatMessage) message);
+                } else {
+                    log.warn("Unsupported message at dispatchMessage. message={}", message);
+                }
+            } catch (Throwable t) {
+                log.warn("Failed to process support message of type {} from {} with tradeId {} and uid {}. Error: {}", message.getClass().getSimpleName(), message.getSenderNodeAddress(), message.getTradeId(), message.getUid(), t.getMessage(), t);
+            }
+        }
+    }
+
+    public void addSystemMsg(Trade trade) {
+        checkArgument(!trade.isArbitrator(), "Arbitrators cannot use trader chat");
+        // We need to use the trade date as otherwise our system msg would not be displayed first as the list is sorted
+        // by date.
+        ChatMessage chatMessage = new ChatMessage(
+                getSupportType(),
+                trade.getId(),
+                0,
+                false,
+                Res.get("tradeChat.rules"),
+                new NodeAddress("null:0000"),
+                trade.getDate().getTime());
+        chatMessage.setSystemMessage(true);
+        trade.getChatMessages().add(chatMessage);
+
+        requestPersistence();
+    }
+}

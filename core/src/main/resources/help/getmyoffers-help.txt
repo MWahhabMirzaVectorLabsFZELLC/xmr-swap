@@ -1,0 +1,28 @@
+getmyoffers
+
+NAME
+----
+getmyoffers - get your offers
+
+SYNOPSIS
+--------
+getmyoffers
+		--direction=<value>
+		--currency-code=<value>
+
+DESCRIPTION
+-----------
+Returns your offers with the given direction and currency-code.
+
+OPTIONS
+-------
+--direction
+		The offer direction (buy|sell).
+
+--currency-code
+		The three letter code of the currency traded for XMR, e.g., EUR, USD, BCH, ...
+
+EXAMPLES
+--------
+Get your offers to sell XMR for USD:
+$ ./haveno-cli --password=xyz --port=9998 getmyoffers --direction=sell --currency-code=usd

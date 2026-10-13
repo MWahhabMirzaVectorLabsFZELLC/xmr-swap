@@ -1,0 +1,331 @@
+/*
+ * This file is part of Bisq.
+ *
+ * Bisq is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ *
+ * Bisq is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Bisq. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+package haveno.desktop.main.market.trades;
+
+import com.google.common.annotations.VisibleForTesting;
+import haveno.common.util.MathUtils;
+import haveno.core.locale.CurrencyUtil;
+import haveno.core.monetary.CryptoMoney;
+import haveno.core.monetary.TraditionalMoney;
+import haveno.core.trade.HavenoUtils;
+import haveno.core.trade.statistics.TradeStatistics3;
+import haveno.desktop.main.market.trades.charts.CandleData;
+import haveno.desktop.util.DisplayUtils;
+import javafx.scene.chart.XYChart;
+import javafx.util.Pair;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.math.BigInteger;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+
+import static haveno.desktop.main.market.trades.TradesChartsViewModel.MAX_TICKS;
+
+@Slf4j
+public class ChartCalculations {
+    static final ZoneId ZONE_ID = ZoneId.systemDefault();
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Async
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    static CompletableFuture<Map<TradesChartsViewModel.TickUnit, Map<Long, Long>>> getUsdAveragePriceMapsPerTickUnit(List<TradeStatistics3> tradeStatisticsList) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<TradesChartsViewModel.TickUnit, Map<Long, Long>> usdAveragePriceMapsPerTickUnit = new HashMap<>();
+            Map<TradesChartsViewModel.TickUnit, Map<Long, List<TradeStatistics3>>> dateMapsPerTickUnit = new HashMap<>();
+            for (TradesChartsViewModel.TickUnit tick : TradesChartsViewModel.TickUnit.values()) {
+                dateMapsPerTickUnit.put(tick, new HashMap<>());
+            }
+
+            synchronized (tradeStatisticsList) {
+                tradeStatisticsList.stream()
+                        .filter(e -> e.getCurrency().equals("USD"))
+                        .forEach(tradeStatistics -> {
+                            for (TradesChartsViewModel.TickUnit tick : TradesChartsViewModel.TickUnit.values()) {
+                                long time = roundToTick(tradeStatistics.getLocalDateTime(), tick).getTime();
+                                Map<Long, List<TradeStatistics3>> map = dateMapsPerTickUnit.get(tick);
+                                map.putIfAbsent(time, new ArrayList<>());
+                                map.get(time).add(tradeStatistics);
+                            }
+                        });
+            }
+
+            dateMapsPerTickUnit.forEach((tick, map) -> {
+                HashMap<Long, Long> priceMap = new HashMap<>();
+                map.forEach((date, tradeStatistics) -> priceMap.put(date, getAverageTraditionalPrice(tradeStatistics)));
+                usdAveragePriceMapsPerTickUnit.put(tick, priceMap);
+            });
+            return usdAveragePriceMapsPerTickUnit;
+        });
+    }
+
+    static CompletableFuture<List<TradeStatistics3>> getTradeStatisticsForCurrency(List<TradeStatistics3> tradeStatisticsList,
+                                                                                   String currencyCode,
+                                                                                   boolean showAllTradeCurrencies) {
+        return CompletableFuture.supplyAsync(() -> {
+            synchronized (tradeStatisticsList) {
+                return tradeStatisticsList.stream()
+                        .filter(e -> showAllTradeCurrencies || e.getCurrency().equals(currencyCode))
+                        .collect(Collectors.toList());
+            }
+        });
+    }
+
+    static CompletableFuture<UpdateChartResult> getUpdateChartResult(List<TradeStatistics3> tradeStatisticsByCurrency,
+                                                                     TradesChartsViewModel.TickUnit tickUnit,
+                                                                     Map<TradesChartsViewModel.TickUnit, Map<Long, Long>> usdAveragePriceMapsPerTickUnit,
+                                                                     String currencyCode) {
+        return CompletableFuture.supplyAsync(() -> {
+            // Generate date range and create sets for all ticks
+            Map<Long, Pair<Date, Set<TradeStatistics3>>> itemsPerInterval = getItemsPerInterval(tradeStatisticsByCurrency, tickUnit);
+
+            // Value volume at day granularity regardless of the display tick, so a wide candle is the sum of
+            // each day's volume at that day's rate rather than one blended rate over the whole candle.
+            NavigableMap<Long, Long> usdPricePerDay = new TreeMap<>(
+                    usdAveragePriceMapsPerTickUnit.getOrDefault(TradesChartsViewModel.TickUnit.DAY, Collections.emptyMap()));
+
+            // create CandleData for defined time interval
+            List<CandleData> candleDataList = itemsPerInterval.entrySet().stream()
+                    .filter(entry -> entry.getKey() >= 0 && !entry.getValue().getValue().isEmpty())
+                    .map(entry -> getCandleData(entry.getKey(), entry.getValue().getValue(), usdPricePerDay, tickUnit, currencyCode, itemsPerInterval))
+                    .sorted(Comparator.comparingLong(o -> o.tick))
+                    .collect(Collectors.toList());
+
+            List<XYChart.Data<Number, Number>> priceItems = candleDataList.stream()
+                    .map(e -> new XYChart.Data<Number, Number>(e.tick, e.open, e))
+                    .collect(Collectors.toList());
+
+            List<XYChart.Data<Number, Number>> volumeItems = candleDataList.stream()
+                    .map(candleData -> new XYChart.Data<Number, Number>(candleData.tick, candleData.accumulatedAmount, candleData))
+                    .collect(Collectors.toList());
+
+            List<XYChart.Data<Number, Number>> volumeInUsdItems = candleDataList.stream()
+                    .map(candleData -> new XYChart.Data<Number, Number>(candleData.tick, candleData.volumeInUsd, candleData))
+                    .collect(Collectors.toList());
+
+            return new UpdateChartResult(itemsPerInterval, priceItems, volumeItems, volumeInUsdItems);
+        });
+    }
+
+    @Getter
+    static class UpdateChartResult {
+        private final Map<Long, Pair<Date, Set<TradeStatistics3>>> itemsPerInterval;
+        private final List<XYChart.Data<Number, Number>> priceItems;
+        private final List<XYChart.Data<Number, Number>> volumeItems;
+        private final List<XYChart.Data<Number, Number>> volumeInUsdItems;
+
+        public UpdateChartResult(Map<Long, Pair<Date, Set<TradeStatistics3>>> itemsPerInterval,
+                                 List<XYChart.Data<Number, Number>> priceItems,
+                                 List<XYChart.Data<Number, Number>> volumeItems,
+                                 List<XYChart.Data<Number, Number>> volumeInUsdItems) {
+
+            this.itemsPerInterval = itemsPerInterval;
+            this.priceItems = priceItems;
+            this.volumeItems = volumeItems;
+            this.volumeInUsdItems = volumeInUsdItems;
+        }
+    }
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////
+    // Private
+    ///////////////////////////////////////////////////////////////////////////////////////////
+
+    static Map<Long, Pair<Date, Set<TradeStatistics3>>> getItemsPerInterval(List<TradeStatistics3> tradeStatisticsByCurrency,
+                                                                            TradesChartsViewModel.TickUnit tickUnit) {
+        // Generate date range and create sets for all ticks
+        Map<Long, Pair<Date, Set<TradeStatistics3>>> itemsPerInterval = new HashMap<>();
+        Date time = new Date();
+        for (long i = MAX_TICKS + 1; i >= 0; --i) {
+            Pair<Date, Set<TradeStatistics3>> pair = new Pair<>((Date) time.clone(), new HashSet<>());
+            itemsPerInterval.put(i, pair);
+            // We adjust the time for the next iteration
+            time.setTime(time.getTime() - 1);
+            time = roundToTick(time, tickUnit);
+        }
+
+        // Get all entries for the defined time interval
+        tradeStatisticsByCurrency.forEach(tradeStatistics -> {
+            for (long i = MAX_TICKS; i > 0; --i) {
+                Pair<Date, Set<TradeStatistics3>> pair = itemsPerInterval.get(i);
+                if (tradeStatistics.getDate().after(pair.getKey())) {
+                    pair.getValue().add(tradeStatistics);
+                    break;
+                }
+            }
+        });
+        return itemsPerInterval;
+    }
+
+
+    static Date roundToTick(LocalDateTime localDate, TradesChartsViewModel.TickUnit tickUnit) {
+        switch (tickUnit) {
+            case YEAR:
+                return Date.from(localDate.withMonth(1).withDayOfYear(1).withHour(0).withMinute(0).withSecond(0).withNano(0).atZone(ZONE_ID).toInstant());
+            case MONTH:
+                return Date.from(localDate.withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0).atZone(ZONE_ID).toInstant());
+            case WEEK:
+                int dayOfWeek = localDate.getDayOfWeek().getValue();
+                LocalDateTime firstDayOfWeek = ChronoUnit.DAYS.addTo(localDate, 1 - dayOfWeek);
+                return Date.from(firstDayOfWeek.withHour(0).withMinute(0).withSecond(0).withNano(0).atZone(ZONE_ID).toInstant());
+            case DAY:
+                return Date.from(localDate.withHour(0).withMinute(0).withSecond(0).withNano(0).atZone(ZONE_ID).toInstant());
+            case HOUR:
+                return Date.from(localDate.withMinute(0).withSecond(0).withNano(0).atZone(ZONE_ID).toInstant());
+            case MINUTE_10:
+                return Date.from(localDate.withMinute(localDate.getMinute() - localDate.getMinute() % 10).withSecond(0).withNano(0).atZone(ZONE_ID).toInstant());
+            default:
+                return Date.from(localDate.atZone(ZONE_ID).toInstant());
+        }
+    }
+
+    static Date roundToTick(Date time, TradesChartsViewModel.TickUnit tickUnit) {
+        return roundToTick(time.toInstant().atZone(ChartCalculations.ZONE_ID).toLocalDateTime(), tickUnit);
+    }
+
+    private static long getAverageTraditionalPrice(List<TradeStatistics3> tradeStatisticsList) {
+        BigInteger accumulatedAmount = BigInteger.ZERO;
+        BigInteger accumulatedVolume = BigInteger.ZERO;
+        for (TradeStatistics3 tradeStatistics : tradeStatisticsList) {
+            accumulatedAmount = accumulatedAmount.add(BigInteger.valueOf(tradeStatistics.getAmount()));
+            accumulatedVolume = accumulatedVolume.add(BigInteger.valueOf(tradeStatistics.getTradeVolume().getValue()));
+        }
+
+        BigInteger accumulatedVolumeAsBI = MathUtils.scaleUpByPowerOf10(accumulatedVolume, TraditionalMoney.SMALLEST_UNIT_EXPONENT + 4);
+        return MathUtils.roundDoubleToLong(HavenoUtils.divide(accumulatedVolumeAsBI, accumulatedAmount));
+    }
+
+    @VisibleForTesting
+    static CandleData getCandleData(long tick, Set<TradeStatistics3> set,
+                                    NavigableMap<Long, Long> usdPricePerDay,
+                                    TradesChartsViewModel.TickUnit tickUnit,
+                                    String currencyCode,
+                                    Map<Long, Pair<Date, Set<TradeStatistics3>>> itemsPerInterval) {
+        long open = 0;
+        long close = 0;
+        long high = 0;
+        long low = 0;
+        BigInteger accumulatedVolume = BigInteger.ZERO;
+        BigInteger accumulatedAmount = BigInteger.ZERO;
+        long numTrades = set.size();
+        List<Long> tradePrices = new ArrayList<>();
+        for (TradeStatistics3 item : set) {
+            long tradePriceAsLong = item.getTradePrice().getValue();
+            // Previously a check was done which inverted the low and high for cryptocurrencies.
+            low = (low != 0) ? Math.min(low, tradePriceAsLong) : tradePriceAsLong;
+            high = (high != 0) ? Math.max(high, tradePriceAsLong) : tradePriceAsLong;
+
+            accumulatedVolume = accumulatedVolume.add(BigInteger.valueOf(item.getTradeVolume().getValue()));
+            accumulatedAmount = accumulatedAmount.add(item.getTradeAmount());
+            tradePrices.add(tradePriceAsLong);
+        }
+        Collections.sort(tradePrices);
+
+        List<TradeStatistics3> list = new ArrayList<>(set);
+        list.sort(Comparator.comparingLong(TradeStatistics3::getDateAsLong));
+        if (list.size() > 0) {
+            open = list.get(0).getTradePrice().getValue();
+            close = list.get(list.size() - 1).getTradePrice().getValue();
+        }
+
+        long averagePrice;
+        Long[] prices = new Long[tradePrices.size()];
+        tradePrices.toArray(prices);
+        long medianPrice = MathUtils.getMedian(prices);
+        boolean isBullish = close > open;
+        int smallestUnitExponent = CurrencyUtil.isCryptoCurrency(currencyCode) ? CryptoMoney.SMALLEST_UNIT_EXPONENT : TraditionalMoney.SMALLEST_UNIT_EXPONENT;
+        BigInteger accumulatedVolumeAsBI = MathUtils.scaleUpByPowerOf10(accumulatedVolume, smallestUnitExponent + 4);
+        averagePrice = MathUtils.roundDoubleToLong(HavenoUtils.divide(accumulatedVolumeAsBI, accumulatedAmount));
+
+        Date dateFrom = new Date(getTimeFromTickIndex(tick, itemsPerInterval));
+        Date dateTo = new Date(getTimeFromTickIndex(tick + 1, itemsPerInterval));
+        String dateString = tickUnit.ordinal() > TradesChartsViewModel.TickUnit.DAY.ordinal() ?
+                DisplayUtils.formatDateTimeSpan(dateFrom, dateTo) :
+                DisplayUtils.formatDate(dateFrom) + " - " + DisplayUtils.formatDate(dateTo);
+
+        // Sum each day's volume valued at its own day's USD rate (interpolated when a day has no USD trades of
+        // its own), so a late USD trade re-values only the days around it rather than the whole candle.
+        Map<Long, BigInteger> amountPerDay = new HashMap<>();
+        for (TradeStatistics3 item : set) {
+            long dayStartDate = roundToTick(item.getLocalDateTime(), TradesChartsViewModel.TickUnit.DAY).getTime();
+            amountPerDay.merge(dayStartDate, item.getTradeAmount(), BigInteger::add);
+        }
+        long volumeInUsd = 0;
+        for (Map.Entry<Long, BigInteger> dayAmount : amountPerDay.entrySet()) {
+            long usdRate = getInterpolatedUsdRate(usdPricePerDay, dayAmount.getKey());
+            // We do not need precision, so we scale down before multiplication otherwise we could get an overflow.
+            long scaledRate = (long) MathUtils.scaleDownByPowerOf10((double) usdRate, smallestUnitExponent);
+            long partialVolumeInUsd = scaledRate * MathUtils.scaleDownByPowerOf10(dayAmount.getValue(), 4).longValue();
+            // We store USD value without decimals as its only total volume, no precision is needed.
+            volumeInUsd += (long) MathUtils.scaleDownByPowerOf10((double) partialVolumeInUsd, smallestUnitExponent);
+        }
+        return new CandleData(tick, open, close, high, low, averagePrice, medianPrice, accumulatedAmount.longValueExact(), accumulatedVolume.longValueExact(),
+                numTrades, isBullish, dateString, volumeInUsd);
+    }
+
+    /**
+     * Resolves the XMR→USD rate for a day's volume: a day with its own USD trades uses its own rate; a gap day
+     * is interpolated linearly by time between the nearest earlier and later days that have USD trades; days
+     * beyond the known range carry the nearest rate flat; with no USD data at all the rate is 0.
+     */
+    static long getInterpolatedUsdRate(NavigableMap<Long, Long> usdPricePerDay, long dayStartDate) {
+        Map.Entry<Long, Long> floor = usdPricePerDay.floorEntry(dayStartDate);
+        Map.Entry<Long, Long> ceiling = usdPricePerDay.ceilingEntry(dayStartDate);
+        if (floor == null && ceiling == null) {
+            return 0;
+        }
+        if (floor == null) {
+            return ceiling.getValue(); // carry back before the first known day
+        }
+        if (ceiling == null) {
+            return floor.getValue(); // carry forward after the last known day
+        }
+        if (floor.getKey().longValue() == ceiling.getKey().longValue()) {
+            return floor.getValue(); // day has its own USD rate
+        }
+        // interpolate between the two bracketing days, weighted by time distance
+        long earlierDate = floor.getKey();
+        long laterDate = ceiling.getKey();
+        double fractionToLater = (double) (dayStartDate - earlierDate) / (double) (laterDate - earlierDate);
+        return floor.getValue() + Math.round((ceiling.getValue() - floor.getValue()) * fractionToLater);
+    }
+
+    static long getTimeFromTickIndex(long tick, Map<Long, Pair<Date, Set<TradeStatistics3>>> itemsPerInterval) {
+        if (tick > MAX_TICKS + 1 ||
+                itemsPerInterval.get(tick) == null) {
+            return 0;
+        }
+        return itemsPerInterval.get(tick).getKey().getTime();
+    }
+}
