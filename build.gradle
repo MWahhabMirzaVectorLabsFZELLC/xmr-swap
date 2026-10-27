@@ -334,8 +334,10 @@ configure([project(':cli'),
             // project root dir as opposed to a 'bin' subdirectory
             if (osdetector.os == 'windows') {
                 def windowsScriptFile = rootProject.layout.projectDirectory.file("${havenoScriptName}.bat").asFile
-                windowsScriptFile.text = windowsScriptFile.text.replace(
+                def scriptText = windowsScriptFile.text.replace(
                     'set APP_HOME=%DIRNAME%..', 'set APP_HOME=%DIRNAME%')
+                scriptText = scriptText.replaceAll('set CLASSPATH=%APP_HOME%\\\\lib\\\\[^\\r\\n]+', 'set CLASSPATH=%APP_HOME%\\\\lib\\\\*')
+                windowsScriptFile.text = scriptText
             } else {
                 rootProject.ext.patchDesktopAppHome(
                         rootProject.layout.projectDirectory.file(havenoScriptName).asFile)
