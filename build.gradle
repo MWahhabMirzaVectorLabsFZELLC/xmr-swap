@@ -13,6 +13,50 @@ plugins {
     id 'org.openjfx.javafxplugin' apply false
 }
 
+tasks.register('verifyMainnetReadiness') {
+    description = 'Fail unless required zeroswap mainnet production values are configured'
+    group = 'verification'
+
+    doLast {
+        List<String> failures = []
+        Map<String, String> sources = [
+                version              : file('common/src/main/java/haveno/common/app/Version.java').text,
+                trade                : file('core/src/main/java/haveno/core/trade/HavenoUtils.java').text,
+                packageConfiguration : file('desktop/package/package.gradle').text,
+                seeds                : file('core/src/main/resources/xmr_mainnet.seednodes').text,
+                filters              : file('core/src/main/java/haveno/core/filter/FilterManager.java').text,
+                alerts               : file('core/src/main/java/haveno/core/alert/AlertManager.java').text,
+                notifications        : file('core/src/main/java/haveno/core/alert/PrivateNotificationManager.java').text,
+                arbitrators          : file('core/src/main/java/haveno/core/support/dispute/arbitration/arbitrator/ArbitratorManager.java').text,
+                providers            : file('core/src/main/java/haveno/core/provider/ProvidersRepository.java').text,
+        ]
+
+        if (!sources.version.contains('P2P_NETWORK_VERSION = "Z"')) failures.add('P2P version Z is missing')
+        if (!sources.trade.contains('RELEASE_DATE = "15-12-2026 00:00:00"')) failures.add('approved launch date is missing')
+        if (!sources.packageConfiguration.contains('--arguments --baseCurrencyNetwork=XMR_MAINNET')) failures.add('installer is not mainnet')
+        if (sources.seeds.contains('placeholder.onion') || sources.seeds.contains('@placeholder')) failures.add('real seed nodes are missing')
+        if (mainnetReturnsEmptyList(sources.filters)) failures.add('filter public keys are missing')
+        if (mainnetReturnsEmptyList(sources.alerts)) failures.add('alert public keys are missing')
+        if (mainnetReturnsEmptyList(sources.notifications)) failures.add('private-notification public keys are missing')
+        if (mainnetReturnsEmptyList(sources.arbitrators)) failures.add('arbitrator public keys are missing')
+        if (sources.providers.contains('elaxlgigphpicy5q7pi5wkz2ko2vgjbq4576vic7febmx4xcxvk6deqd.onion')) failures.add('upstream price providers are configured')
+        File releaseApproval = file('config/mainnet/release-approval.properties')
+        if (!releaseApproval.exists()) {
+            failures.add('release signing approval file is missing')
+        } else if (releaseApproval.text.contains('REQUIRED')) {
+            failures.add('release signing approvals are incomplete')
+        }
+
+        if (!failures.isEmpty()) {
+            throw new GradleException('Mainnet NO-GO:\n- ' + failures.join('\n- '))
+        }
+    }
+}
+
+ext.mainnetReturnsEmptyList = { String source ->
+    source ==~ /(?s).*case XMR_MAINNET:\s*return List\.of\(\);.*/
+}
+
 configure(rootProject) {
     ext {
         havenoJavaVersion = libs.versions.java.get().toInteger()

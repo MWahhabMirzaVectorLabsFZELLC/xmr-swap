@@ -1,0 +1,16 @@
+# Private unrestricted Monero node for zeroswap services.
+mainnet=1
+data-dir=/var/lib/monero
+log-file=/var/log/monero/monerod.log
+log-level=0
+rpc-bind-ip=127.0.0.1
+rpc-bind-port=18081
+confirm-external-bind=0
+restricted-rpc=0
+no-igd=1
+hide-my-port=1
+db-sync-mode=safe:sync
+prune-blockchain=1
+
+# REQUIRED: set with a protected runtime secret, not in this file.
+# rpc-login=zeroswap-rpc:replace-with-a-long-random-password

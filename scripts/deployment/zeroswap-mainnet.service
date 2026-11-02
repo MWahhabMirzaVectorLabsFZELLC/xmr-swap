@@ -1,0 +1,23 @@
+[Unit]
+Description=zeroswap mainnet daemon
+After=network-online.target tor.service monerod.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zeroswap
+Group=zeroswap
+EnvironmentFile=/etc/zeroswap/mainnet.env
+ExecStart=/opt/zeroswap/bin/haveno-daemon --baseCurrencyNetwork=XMR_MAINNET --appName=zeroswap --configFile=${ZEROSWAP_CONFIG_FILE} --apiBindAddress=127.0.0.1
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zeroswap
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

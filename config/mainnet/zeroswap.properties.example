@@ -1,0 +1,17 @@
+# Copy this file outside the repository and replace every REQUIRED value.
+# Never commit passwords, wallet seeds, private keys, or RPC credentials.
+baseCurrencyNetwork=XMR_MAINNET
+appName=zeroswap
+apiBindAddress=127.0.0.1
+apiPort=9998
+apiHiddenService=false
+useLocalhostForP2P=false
+
+# REQUIRED: use at least two zeroswap-operated price providers.
+# providers=http://provider-one.onion/,http://provider-two.onion/
+
+# REQUIRED for daemon/API use. Prefer a protected environment or secret file.
+# apiPassword=replace-with-a-long-random-password
+
+# REQUIRED: private authenticated Monero RPC endpoints are preferred.
+# xmrNode=http://127.0.0.1:18081

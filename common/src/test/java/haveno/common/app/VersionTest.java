@@ -50,4 +50,16 @@ public class VersionTest {
         assertFalse(Version.isNewVersion("0.5.0", "1.5.0"));
         assertFalse(Version.isNewVersion("0.4.9", "0.5.0"));
     }
+
+    @Test
+    public void testZeroswapP2PNetworkIsIsolatedByBaseCurrencyNetwork() {
+        assertEquals("Z", Version.P2P_NETWORK_VERSION);
+
+        Version.setBaseCryptoNetworkId(0);
+        assertEquals("0Z", Version.getP2PMessageVersion());
+        Version.setBaseCryptoNetworkId(1);
+        assertEquals("1Z", Version.getP2PMessageVersion());
+        Version.setBaseCryptoNetworkId(2);
+        assertEquals("2Z", Version.getP2PMessageVersion());
+    }
 }

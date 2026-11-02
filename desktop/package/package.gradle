@@ -50,6 +50,18 @@ task jpackageSanityChecks {
     }
 }
 
+task verifyMainnetPackageConfiguration {
+    description = 'Fail if production installers are not configured for Monero mainnet'
+
+    doLast {
+        String networkArgument = file('package/package.gradle').readLines()
+                .find { it.trim().startsWith('" --arguments --baseCurrencyNetwork=') }
+        if (networkArgument == null || !networkArgument.contains('XMR_MAINNET')) {
+            throw new GradleException('Production installers must not use a test network')
+        }
+    }
+}
+
 task getJavaBinariesDownloadURLs {
     description = 'Find out which JDK will be used for jpackage and prepare to download it'
     dependsOn('jpackageSanityChecks')
@@ -202,6 +214,7 @@ task packageInstallers {
     dependsOn(rootProject.clean)
     dependsOn(':core:havenoDeps')
     dependsOn(':desktop:shadowJar')
+    dependsOn('verifyMainnetPackageConfiguration')
 
     doLast {
         String jPackageFilePath = retrieveAndExtractJavaBinaries.property('jpackageFilePath')
@@ -277,7 +290,7 @@ task packageInstallers {
                         " --main-jar ${mainJarName}" +
                         " --main-class haveno.desktop.app.HavenoAppMain" +
                         rootProject.ext.havenoDesktopJpackageOpts +
-                        " --arguments --baseCurrencyNetwork=XMR_STAGENET"
+                        " --arguments --baseCurrencyNetwork=XMR_MAINNET"
                 // Note: -Djdk.module.illegalAccess=deny breaks Guice reflection (UI won't load)
         )
 

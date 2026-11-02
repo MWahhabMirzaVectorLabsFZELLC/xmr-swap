@@ -1,0 +1,7 @@
+# Copy to release-approval.properties after independent verification.
+# This file contains public fingerprints and evidence references, never secrets.
+releaseSigningFingerprint=REQUIRED
+securityApproval=REQUIRED
+operationsApproval=REQUIRED
+legalApproval=REQUIRED
+stagenetEvidence=REQUIRED
