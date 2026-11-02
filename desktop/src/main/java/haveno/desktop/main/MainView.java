@@ -21,6 +21,7 @@ import com.google.inject.Inject;
 import com.jfoenix.controls.JFXBadge;
 import com.jfoenix.controls.JFXComboBox;
 import haveno.common.HavenoException;
+import haveno.common.config.Config;
 import haveno.common.Timer;
 import haveno.common.UserThread;
 import haveno.common.util.Tuple2;
@@ -116,6 +117,7 @@ import javafx.scene.shape.Circle;
 import javafx.scene.text.TextAlignment;
 import javafx.stage.PopupWindow;
 import javafx.util.Duration;
+import com.google.inject.name.Named;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -148,6 +150,7 @@ public class MainView extends InitializableView<StackPane, MainViewModel>  {
     private static final long P2P_NETWORK_WARN_MSG_POPUP_THROTTLE_MS = 10 * 60 * 1000;
     private final TorNetworkSettingsWindow torNetworkSettingsWindow;
     private final Preferences preferences;
+    private String appName;
     private static final int networkIconSize = 20;
     @Getter
     private Region startupStatusContent;
@@ -180,13 +183,15 @@ public class MainView extends InitializableView<StackPane, MainViewModel>  {
                     Navigation navigation,
                     Transitions transitions,
                     TorNetworkSettingsWindow torNetworkSettingsWindow,
-                    Preferences preferences) {
+                    Preferences preferences,
+                    @Named(Config.APP_NAME) String appName) {
         super(model);
         this.viewLoader = viewLoader;
         this.navigation = navigation;
         MainView.transitions = transitions;
         this.torNetworkSettingsWindow = torNetworkSettingsWindow;
         this.preferences = preferences;
+        this.appName = appName;
     }
 
     @Override
@@ -396,7 +401,8 @@ public class MainView extends InitializableView<StackPane, MainViewModel>  {
         GUIUtil.setBrandingLogo(logo, preferences, "/images/logo_landscape_light_mode.png", "/images/logo_landscape_dark_mode.png", 0, 40);
         Accessibility.mute(logo);
 
-        final HBox pane = new HBox(logo);
+        Label traderLabel = new Label(GUIUtil.getTraderLabel(appName));
+        final HBox pane = new HBox(logo, traderLabel);
         pane.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(pane, Priority.ALWAYS);
         pane.getStyleClass().add("nav-logo");
