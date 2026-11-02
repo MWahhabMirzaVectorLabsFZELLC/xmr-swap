@@ -204,6 +204,14 @@ public class GUIUtil {
         return preferences.getUserLanguage();
     }
 
+    public static String getTraderLabel(String appName) {
+        if (appName == null) return "";
+        if (appName.contains("arbitrator")) return "Arbitrator";
+        if (appName.contains("user1")) return "Seller";
+        if (appName.contains("user2") || appName.contains("user3")) return "Buyer";
+        return "";
+    }
+
     public static double getScrollbarWidth(Node scrollablePane) {
         Node node = scrollablePane.lookup(".scroll-bar");
         if (node instanceof ScrollBar) {

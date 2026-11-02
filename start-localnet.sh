@@ -18,6 +18,7 @@ else
     echo "[Node 1]   Starting on port 28081 (log: .localnet/logs/node1.log)..."
     nohup ./.localnet/monerod.exe \
         --testnet \
+        --non-interactive \
         --no-igd \
         --hide-my-port \
         --data-dir .localnet/xmr_local/node1 \
@@ -31,7 +32,7 @@ else
         --rpc-max-connections 1000 \
         --max-connections-per-ip 10 \
         --rpc-max-connections-per-private-ip 1000 \
-        > .localnet/logs/node1.log 2>&1 &
+        < /dev/null > .localnet/logs/node1.log 2>&1 &
     echo $! > .localnet/pids/node1.pid
 fi
 
@@ -42,6 +43,7 @@ else
     echo "[Node 2]   Starting on port 48081 (log: .localnet/logs/node2.log)..."
     nohup ./.localnet/monerod.exe \
         --testnet \
+        --non-interactive \
         --no-igd \
         --hide-my-port \
         --data-dir .localnet/xmr_local/node2 \
@@ -58,7 +60,7 @@ else
         --rpc-max-connections 1000 \
         --max-connections-per-ip 10 \
         --rpc-max-connections-per-private-ip 1000 \
-        > .localnet/logs/node2.log 2>&1 &
+        < /dev/null > .localnet/logs/node2.log 2>&1 &
     echo $! > .localnet/pids/node2.pid
 fi
 
@@ -67,14 +69,14 @@ if netstat -ano 2>/dev/null | grep -q ":2002.*LISTENING"; then
     echo "[Seednode] Already running on port 2002."
 else
     echo "[Seednode] Starting on port 2002 (log: .localnet/logs/seednode.log)..."
-    nohup cmd.exe /c haveno-seednode.bat \
+    nohup cmd.exe //c haveno-seednode.bat \
         --baseCurrencyNetwork=XMR_LOCAL \
         --useLocalhostForP2P=true \
         --useDevPrivilegeKeys=true \
         --nodePort=2002 \
         --appName=haveno-XMR_LOCAL_Seed_2002 \
         --xmrNode=http://localhost:28081 \
-        > .localnet/logs/seednode.log 2>&1 &
+        < /dev/null > .localnet/logs/seednode.log 2>&1 &
     echo $! > .localnet/pids/seednode.pid
 fi
 

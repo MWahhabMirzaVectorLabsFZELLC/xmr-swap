@@ -586,6 +586,11 @@ public class HavenoApp extends Application implements UncaughtExceptionHandler {
         if (injector.getInstance(Config.class).useDevMode) {
             postFixes.add("DEV MODE");
         }
+        // add a small trader label (arbitrator, seller, buyer) based on the app name
+        String traderLabel = GUIUtil.getTraderLabel(appName);
+        if (!traderLabel.isEmpty()) {
+            postFixes.add(traderLabel);
+        }
         if (!postFixes.isEmpty()) {
             appName += " [" + Joiner.on(", ").join(postFixes) + "]";
         }
