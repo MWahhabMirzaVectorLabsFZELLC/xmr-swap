@@ -194,8 +194,8 @@ public class AvoidStandbyModeService {
             String cmd = inhibitorPathSpec.get();
             if (Utilities.isLinux()) {
                 params = cmd.contains("gnome-session-inhibit")
-                        ? new String[]{cmd, "--app-id", "Haveno", "--inhibit", "suspend", "--reason", "Avoid Standby", "--inhibit-only"}
-                        : new String[]{cmd, "--who", "Haveno", "--what", "sleep", "--why", "Avoid Standby", "--mode", "block", "tail", "-f", "/dev/null"};
+                        ? new String[]{cmd, "--app-id", "zeroswap", "--inhibit", "suspend", "--reason", "Avoid Standby", "--inhibit-only"}
+                        : new String[]{cmd, "--who", "zeroswap", "--what", "sleep", "--why", "Avoid Standby", "--mode", "block", "tail", "-f", "/dev/null"};
             } else {
                 params = null;
             }

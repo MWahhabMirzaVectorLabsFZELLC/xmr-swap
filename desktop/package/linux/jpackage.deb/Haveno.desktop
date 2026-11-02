@@ -1,11 +1,11 @@
 [Desktop Entry]
-Name=Haveno
+Name=zeroswap
 GenericName=Monero Exchange
 Comment=A decentralized monero exchange network.
-Exec=/opt/haveno/bin/Haveno
-Icon=/opt/haveno/lib/Haveno.png
+Exec=/opt/zeroswap/bin/zeroswap
+Icon=/opt/zeroswap/lib/zeroswap.png
 Terminal=false
 Type=Application
 Categories=Network
 MimeType=
-StartupWMClass=haveno.desktop.app.HavenoApp
+StartupWMClass=zeroswap

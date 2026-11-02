@@ -17,15 +17,12 @@
 
 package haveno.desktop.app;
 
-import haveno.common.config.BaseCurrencyNetwork;
-import haveno.common.config.Config;
 import haveno.core.locale.Res;
 import haveno.core.user.Preferences;
 import haveno.core.util.FormattingUtils;
 import haveno.desktop.components.AutoTooltipLabel;
 import haveno.desktop.components.DarkModeToggle;
 import haveno.desktop.components.controlsfx.control.PopOver;
-import haveno.desktop.util.GUIUtil;
 import haveno.desktop.util.Transitions;
 import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
@@ -33,7 +30,6 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
-import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.layout.Priority;
@@ -49,17 +45,13 @@ import javafx.scene.layout.VBox;
  */
 public class StartupShell extends StackPane {
 
-    // logo size, fixed so the branding never shifts across the startup phases
-    private static final double LOGO_FIT_WIDTH = 450;
     // match the password prompt's height so progress screens preserve its centered position
     private static final double CONTENT_HEIGHT = 140;
-    // slim landscape logo shown while tall content like the first-run wizard needs the vertical space
-    private static final double COMPACT_LOGO_FIT_WIDTH = 190;
 
     private final StackPane appLayer = new StackPane();
     private final StackPane overlay;
     private final StackPane contentSlot = new StackPane();
-    private final ImageView logo = new ImageView();
+    private final Label logo = new Label("zeroswap");
     private final Hyperlink help = new Hyperlink(Res.get("password.startup.help"));
     private PopOver helpPopover;
     private final Preferences preferences;
@@ -72,9 +64,6 @@ public class StartupShell extends StackPane {
         this.transitions = transitions;
         setId("splash");
 
-        logo.setFitWidth(LOGO_FIT_WIDTH);
-        logo.setPreserveRatio(true);
-        logo.setSmooth(true);
         applySplashLogo();
 
         contentSlot.setAlignment(Pos.TOP_CENTER);
@@ -208,15 +197,11 @@ public class StartupShell extends StackPane {
         if (compactBranding == compact) return;
         compactBranding = compact;
         if (compact) {
-            logo.setId("image-logo-splash-landscape");
-            logo.setFitWidth(COMPACT_LOGO_FIT_WIDTH);
-            GUIUtil.setBrandingLogo(logo, preferences, "/images/logo_splash_landscape_light_mode.png",
-                    "/images/logo_splash_landscape_dark_mode.png", COMPACT_LOGO_FIT_WIDTH, 0);
+            logo.setStyle("-fx-font-size: 2.5em; -fx-font-weight: bold; -fx-text-fill: -bs-color-primary;");
             VBox.setMargin(contentSlot, new Insets(16, 0, 0, 0));
             contentSlot.setMinHeight(Region.USE_COMPUTED_SIZE);
             setWizardBackdrop(true);
         } else {
-            logo.setFitWidth(LOGO_FIT_WIDTH);
             applySplashLogo();
             VBox.setMargin(contentSlot, new Insets(30, 0, 0, 0));
             contentSlot.setMinHeight(CONTENT_HEIGHT);
@@ -240,12 +225,8 @@ public class StartupShell extends StackPane {
         }
     }
 
-    // decode the theme's splash logo at device-pixel size for crisp HiDPI rendering; keeps the CSS id as fallback
     private void applySplashLogo() {
-        boolean mainnet = Config.baseCurrencyNetwork() == BaseCurrencyNetwork.XMR_MAINNET;
-        logo.setId(mainnet ? "image-logo-splash" : "image-logo-splash-testnet");
-        String splashBase = mainnet ? "/images/logo_splash" : "/images/logo_splash_testnet";
-        GUIUtil.setBrandingLogo(logo, preferences, splashBase + "_light_mode.png", splashBase + "_dark_mode.png", LOGO_FIT_WIDTH, 0);
+        logo.setStyle("-fx-font-size: 5em; -fx-font-weight: bold; -fx-text-fill: -bs-color-primary;");
     }
 
     /** Place the main app UI behind the overlay, ready to be revealed when startup completes. */

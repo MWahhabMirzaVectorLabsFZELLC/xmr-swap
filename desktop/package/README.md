@@ -1,7 +1,7 @@
-Follow these instructions to create installers for the Haveno Java desktop application on each platform.
+Follow these instructions to create installers for the zeroswap Java desktop application on each platform.
 
 > **Note**
-> These steps will delete the previously built Haveno binaries, so they'll need rebuilt after.
+> These steps will delete the previously built zeroswap binaries, so they will need to be rebuilt afterward.
 
 ## Linux
 
@@ -16,9 +16,9 @@ From x86_64 machine:
 7. Path to installer is printed at the end. Execute to install, e.g.: `sudo dpkg -i <path>.deb` or open `<path>.deb` with Software Install.
 
 Note: Please see [flatpak.md](../../docs/flatpak.md) for information on
-distributing Haveno via Flatpak.
+distributing zeroswap via Flatpak.
 
-Haveno data folder on Linux: `/home/<username>/.local/share/Haveno/`
+zeroswap data folder on Linux: `/home/<username>/.local/share/zeroswap/`
 
 ## macOS
 
@@ -29,11 +29,11 @@ From x86_64 machine:
 3. Confirm prompts.
 4. Path to installer printed at end.
 5. `open <path>`
-6. Open installer and drag Haveno.app to Applications.
-7. `sudo xattr -rd com.apple.quarantine /Applications/Haveno.app`
-8. Right click /Applications/Haveno.app > Open. Repeat again if necessary, despite being "damaged".
+6. Open installer and drag zeroswap.app to Applications.
+7. `sudo xattr -rd com.apple.quarantine /Applications/zeroswap.app`
+8. Right click /Applications/zeroswap.app > Open.
 
-Haveno data folder on Mac: `/Users/<username>/Library/Application Support/Haveno/`
+zeroswap data folder on Mac: `/Users/<username>/Library/Application Support/zeroswap/`
 
 ## Windows
 
@@ -54,12 +54,12 @@ Haveno data folder on Mac: `/Users/<username>/Library/Application Support/Haveno
 7. Confirm prompts.
 8. Path to installer is printed at the end. Execute to install.
 
-Haveno data folder on Windows: `~\AppData\Roaming\Haveno\`
+zeroswap data folder on Windows: `~\AppData\Roaming\zeroswap\`
 
-## Copying installer and rebuilding Haveno binaries
+## Copying installer and rebuilding zeroswap binaries
 
 1. Copy the installer to a safe location because it will be deleted in the next step.
-2. `make clean && make` (or `make clean && make skip-tests`) to rebuild Haveno apps.
+2. `make clean && make` (or `make clean && make skip-tests`) to rebuild zeroswap apps.
 
 ## Additional Notes
 
@@ -111,4 +111,4 @@ Pngs were resized and pasted into the WixUi images using paint. [CloudConvert](h
 
 #### Known Issues
 
-The installer's final step "Launch Haveno" has a different background color. The setup executable does not have an icon.
+The installer's final step "Launch zeroswap" has a different background color. The setup executable does not have an icon.

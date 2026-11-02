@@ -49,7 +49,7 @@ public class HavenoAppMain extends HavenoExecutable {
     private StartupWizard.Result startupWizardResult;
 
     public HavenoAppMain() {
-        super("Haveno Desktop", "haveno-desktop", HavenoExecutable.DEFAULT_APP_NAME, Version.VERSION);
+        super("zeroswap Desktop", "haveno-desktop", HavenoExecutable.DEFAULT_APP_NAME, Version.VERSION);
     }
 
     public static void main(String[] args) {

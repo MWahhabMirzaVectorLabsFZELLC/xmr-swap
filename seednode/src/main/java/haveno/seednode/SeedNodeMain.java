@@ -45,7 +45,7 @@ public class SeedNodeMain extends ExecutableForAppWithP2p {
     private Timer checkConnectionLossTime;
 
     public SeedNodeMain() {
-        super("Haveno Seednode", "haveno-seednode", "haveno_seednode", VERSION);
+        super("zeroswap Seednode", "haveno-seednode", "haveno_seednode", VERSION);
     }
 
     public static void main(String[] args) {

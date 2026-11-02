@@ -1,11 +1,11 @@
 [Unit]
-Description=Haveno seednode
+Description=zeroswap seednode
 After=network.target
 
 [Service]
 User=haveno
 Group=haveno
-SyslogIdentifier=Haveno-Seednode
+SyslogIdentifier=zeroswap-Seednode
 
 # $PATH is a placeholder
 ExecStart=/bin/sh $PATH/haveno-seednode --baseCurrencyNetwork=XMR_STAGENET\
@@ -15,7 +15,7 @@ ExecStart=/bin/sh $PATH/haveno-seednode --baseCurrencyNetwork=XMR_STAGENET\
 #  --hiddenServiceAddress=example.onion\
   --hiddenServiceParams="PoWDefensesEnabled=1,PoWQueueRate=50,PoWQueueBurst=250"\
   --nodePort=2002\
-  --appName=haveno-XMR_STAGENET_Seed_2002\
+  --appName=zeroswap-XMR_STAGENET_Seed_2002\
   --xmrNode=http://[::1]:38088
 
 ExecStop=/bin/kill ${MAINPID} ; sleep 5

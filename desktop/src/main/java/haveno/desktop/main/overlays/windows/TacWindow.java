@@ -20,18 +20,15 @@ package haveno.desktop.main.overlays.windows;
 import com.google.inject.Inject;
 import haveno.common.util.Utilities;
 import haveno.core.locale.Res;
-import haveno.core.user.Preferences;
 import haveno.desktop.app.HavenoApp;
 import haveno.desktop.app.StartupShell;
 import haveno.desktop.components.AutoTooltipButton;
 import haveno.desktop.main.overlays.Overlay;
-import haveno.desktop.util.GUIUtil;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
-import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
@@ -53,7 +50,6 @@ public class TacWindow extends Overlay<TacWindow> {
 
     private static final double WINDOW_WIDTH = 900;
     private static final double WINDOW_HEIGHT = 555;
-    private static final double LOGO_FIT_WIDTH = 190;
     private static final double LOGO_GAP = 16;
     private static final double SHADOW_PADDING = 30;
     // bottom bar zone kept clear like the shell's wizard column
@@ -66,17 +62,15 @@ public class TacWindow extends Overlay<TacWindow> {
     private static final double PAGE_WIDTH = WINDOW_WIDTH - GRID_HORIZONTAL_PADDING;
     private static final double PAGE_HEIGHT = WINDOW_HEIGHT - TITLE_BAR_HEIGHT - 24 - 20 - 1 - FOOTER_HEIGHT;
 
-    private final Preferences preferences;
     private TacContent content;
     private StackPane rootContainer;
-    private ImageView logo;
+    private Label logo;
     private VBox riskPage, legalPage;
     private AutoTooltipButton backButton;
     private boolean isLegalPageVisible;
 
     @Inject
-    public TacWindow(Preferences preferences) {
-        this.preferences = preferences;
+    public TacWindow() {
         type = Type.Attention;
         width = WINDOW_WIDTH;
     }
@@ -119,13 +113,8 @@ public class TacWindow extends Overlay<TacWindow> {
         windowContainer.getChildren().addAll(createTitleBar(), gridPane);
 
         // compact landscape logo above the card, matching the startup wizard branding
-        logo = new ImageView();
-        logo.setId("image-logo-splash-landscape");
-        logo.setFitWidth(LOGO_FIT_WIDTH);
-        logo.setPreserveRatio(true);
-        logo.setSmooth(true);
-        GUIUtil.setBrandingLogo(logo, preferences, "/images/logo_splash_landscape_light_mode.png",
-                "/images/logo_splash_landscape_dark_mode.png", LOGO_FIT_WIDTH, 0);
+        logo = new Label("zeroswap");
+        logo.setStyle("-fx-font-size: 2.5em; -fx-font-weight: bold; -fx-text-fill: -bs-color-primary;");
 
         VBox column = new VBox(LOGO_GAP, logo, windowContainer);
         column.setAlignment(Pos.TOP_CENTER);

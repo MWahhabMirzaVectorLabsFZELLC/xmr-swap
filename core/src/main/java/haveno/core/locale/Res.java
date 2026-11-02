@@ -113,6 +113,7 @@ public class Res {
     public static String get(String key) {
         try {
             return resourceBundle.getString(key)
+                    .replace("Haveno", "zeroswap")
                     .replace("XMR", baseCurrencyCode)
                     .replace("Monero", baseCurrencyName)
                     .replace("monero", baseCurrencyNameLowerCase);

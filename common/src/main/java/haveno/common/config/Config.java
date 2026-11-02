@@ -364,14 +364,14 @@ public class Config {
                         .describedAs("host:port[,...]");
 
         ArgumentAcceptingOptionSpec<String> bannedPriceRelayNodesOpt =
-                parser.accepts(BANNED_PRICE_RELAY_NODES, "List Haveno price nodes to ban")
+                parser.accepts(BANNED_PRICE_RELAY_NODES, "List zeroswap price nodes to ban")
                         .withRequiredArg()
                         .ofType(String.class)
                         .withValuesSeparatedBy(',')
                         .describedAs("host:port[,...]");
 
         ArgumentAcceptingOptionSpec<String> bannedSeedNodesOpt =
-                parser.accepts(BANNED_SEED_NODES, "List Haveno seed nodes to ban")
+                parser.accepts(BANNED_SEED_NODES, "List zeroswap seed nodes to ban")
                         .withRequiredArg()
                         .ofType(String.class)
                         .withValuesSeparatedBy(',')
@@ -518,14 +518,14 @@ public class Config {
 
         ArgumentAcceptingOptionSpec<Path> torrcFileOpt =
                 parser.accepts(TORRC_FILE, "An existing torrc-file to be sourced for Tor. Note that torrc-entries, " +
-                        "which are critical to Haveno's correct operation, cannot be overwritten.")
+                        "which are critical to zeroswap's correct operation, cannot be overwritten.")
                         .withRequiredArg()
                         .describedAs("File")
                         .withValuesConvertedBy(new PathConverter(PathProperties.FILE_EXISTING, PathProperties.READABLE));
 
         ArgumentAcceptingOptionSpec<String> torrcOptionsOpt =
-                parser.accepts(TORRC_OPTIONS, "A list of torrc-entries to amend to Haveno's torrc. Note that " +
-                        "torrc-entries, which are critical to Haveno's flawless operation, cannot be overwritten. " +
+                parser.accepts(TORRC_OPTIONS, "A list of torrc-entries to amend to zeroswap's torrc. Note that " +
+                        "torrc-entries, which are critical to zeroswap's flawless operation, cannot be overwritten. " +
                         "[torrc options line, torrc option, ...]")
                         .withRequiredArg()
                         .withValuesConvertedBy(RegexMatcher.regex("^([^\\s,]+\\s[^,]+,?\\s*)+$"))
@@ -542,13 +542,13 @@ public class Config {
                         .defaultsTo("");
 
         ArgumentAcceptingOptionSpec<String> torControlHostOpt =
-                parser.accepts(TOR_CONTROL_HOST, "The control hostname of an already running Tor service to be used by Haveno.")
+                parser.accepts(TOR_CONTROL_HOST, "The control hostname of an already running Tor service to be used by zeroswap.")
                         .withRequiredArg()
                         .defaultsTo("127.0.0.1");
 
         ArgumentAcceptingOptionSpec<Integer> torControlPortOpt =
                 parser.accepts(TOR_CONTROL_PORT,
-                        "The control port of an already running Tor service to be used by Haveno.")
+                        "The control port of an already running Tor service to be used by zeroswap.")
                         .availableUnless(TORRC_FILE, TORRC_OPTIONS)
                         .withRequiredArg()
                         .ofType(int.class)
@@ -663,7 +663,7 @@ public class Config {
                 parser.accepts(USER_AGENT,
                         "User agent at btc node connections")
                         .withRequiredArg()
-                        .defaultsTo("Haveno");
+                        .defaultsTo("zeroswap");
 
         ArgumentAcceptingOptionSpec<Integer> numConnectionsForBtcOpt =
                 parser.accepts(NUM_CONNECTIONS_FOR_BTC, "Number of connections to the Bitcoin network")
@@ -732,7 +732,7 @@ public class Config {
 
         ArgumentAcceptingOptionSpec<Boolean> passwordRequiredOpt =
                 parser.accepts(PASSWORD_REQUIRED,
-                        "Requires a password for creating a Haveno account")
+                        "Requires a password for creating a zeroswap account")
                         .withRequiredArg()
                         .ofType(boolean.class)
                         .defaultsTo(false);
@@ -900,7 +900,7 @@ public class Config {
 
         if (apiHiddenService) {
             if (useLocalhostForP2P || !hiddenServiceAddress.isEmpty())
-                throw new ConfigException("The '%s' option requires Haveno to use its own or a running Tor", API_HIDDEN_SERVICE);
+                throw new ConfigException("The '%s' option requires zeroswap to use its own or a running Tor", API_HIDDEN_SERVICE);
             if (apiPassword.length() < 8)
                 throw new ConfigException("The '%s' option requires an '%s' of at least 8 characters", API_HIDDEN_SERVICE, API_PASSWORD);
             if (apiHiddenServicePort < 1 || apiHiddenServicePort > 65535)

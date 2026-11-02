@@ -1,5 +1,5 @@
 [Unit]
-Description=Haveno Price Node
+Description=zeroswap Price Node
 After=network.target
 
 [Service]

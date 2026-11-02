@@ -1,5 +1,5 @@
 [Unit]
-Description=Haveno network monitor
+Description=zeroswap network monitor
 After=network.target
 
 [Service]

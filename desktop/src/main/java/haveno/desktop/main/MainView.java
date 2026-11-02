@@ -391,18 +391,11 @@ public class MainView extends InitializableView<StackPane, MainViewModel>  {
 
     @NotNull
     private Pane getLogoPane() {
-        ImageView logo = new ImageView();
-        logo.setId("image-logo-landscape");
-        logo.setPreserveRatio(true);
-        logo.setFitHeight(40);
-        logo.setSmooth(true);
-
-        // decode the landscape logo at device-pixel size for crisp HiDPI rendering; keeps the CSS id as fallback
-        GUIUtil.setBrandingLogo(logo, preferences, "/images/logo_landscape_light_mode.png", "/images/logo_landscape_dark_mode.png", 0, 40);
-        Accessibility.mute(logo);
+        Label logo = new Label("zeroswap");
+        logo.setStyle("-fx-font-size: 2em; -fx-font-weight: bold; -fx-text-fill: -bs-color-primary;");
 
         Label traderLabel = new Label(GUIUtil.getTraderLabel(appName));
-        final HBox pane = new HBox(logo, traderLabel);
+        final HBox pane = new HBox(8, logo, traderLabel);
         pane.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(pane, Priority.ALWAYS);
         pane.getStyleClass().add("nav-logo");

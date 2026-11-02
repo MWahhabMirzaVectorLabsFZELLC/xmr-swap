@@ -158,7 +158,7 @@ public class PasswordRecoveryApp extends Application {
         Scene scene = new Scene(scroll, 900, 790);
         CssTheme.loadSceneStyles(scene, theme, false);
         stage.setScene(scene);
-        stage.setTitle(Res.get("password.recovery.title") + " — Haveno");
+        stage.setTitle(Res.get("password.recovery.title") + " — zeroswap");
         stage.getIcons().add(ImageUtil.getApplicationIconImage());
         stage.setMinWidth(620);
         stage.setMinHeight(480);

@@ -611,7 +611,7 @@ public abstract class Overlay<T extends Overlay<T>> {
                     Window ownerWindow = rootScene.getWindow();
                     // window name for screen readers, falling back to the app title
                     String ownerTitle = ownerWindow instanceof Stage ? ((Stage) ownerWindow).getTitle() : null;
-                    stage.setTitle(headLine != null ? headLine : ownerTitle != null ? ownerTitle : "Haveno");
+                    stage.setTitle(headLine != null ? headLine : ownerTitle != null ? ownerTitle : "zeroswap");
                     Scene scene = new Scene(getRootContainer());
                     stage.setScene(scene);
                     // resolve scenes here because the parents' stage creation may also have been queued

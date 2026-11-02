@@ -59,7 +59,7 @@ class CoreHelpService {
         while ((line = br.readLine()) != null)
             builder.append(line).append("\n");
 
-        return builder.toString();
+        return builder.toString().replace("Haveno", "zeroswap");
     }
 
     // Main method for devs to view help text without running the server.

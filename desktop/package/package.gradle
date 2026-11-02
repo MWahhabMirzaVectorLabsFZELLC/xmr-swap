@@ -31,10 +31,10 @@ task jpackageSanityChecks {
             def requiredJavaVersion = rootProject.ext.havenoJavaVersion
             def runningJavaVersion = JavaVersion.current().majorVersion.toInteger()
             if (runningJavaVersion < requiredJavaVersion) {
-                ant.fail("Java ${requiredJavaVersion} or newer is required to package Haveno, but ${JavaVersion.current()} is active.")
+                ant.fail("Java ${requiredJavaVersion} or newer is required to package zeroswap, but ${JavaVersion.current()} is active.")
             }
             executeCmd("java --version")
-            ant.input(message: "Above you see the installed java version, which will be used to compile and build Haveno.\n" +
+            ant.input(message: "Above you see the installed java version, which will be used to compile and build zeroswap.\n" +
                     "Is this java version ok for that? (y=continue, n=abort)",
                     addproperty: "sanity-check-3",
                     validargs: "y,n")
@@ -246,7 +246,7 @@ task packageInstallers {
         // Remove the -SNAPSHOT suffix from the version string (originally defined in build.gradle)
         // Having it in would have resulted in an invalid version property for several platforms (mac, linux/rpm)
         String appVersion = version.replaceAll("-SNAPSHOT", "")
-        println "Packaging Haveno version ${appVersion}"
+        println "Packaging zeroswap version ${appVersion}"
 
         // zip jar lib for Raspberry Pi only on macOS as there are path issues on Windows and it is only needed once
         // for the release
@@ -257,8 +257,8 @@ task packageInstallers {
         }
 
         //String appDescription = 'A decentralized monero exchange network.'
-        String appCopyright = '© 2026 Haveno'
-        String appNameAndVendor = 'Haveno'
+        String appCopyright = '© 2026 zeroswap'
+        String appNameAndVendor = 'zeroswap'
 
         String commonOpts = new String(
                 // Generic options
@@ -347,7 +347,7 @@ task packageInstallers {
 
             String osKey = getJavaBinariesDownloadURLs.property('osKey')
 
-            File appDir = new File("${jpackageTempDir}/Haveno")
+            File appDir = new File("${jpackageTempDir}/zeroswap")
             File templateAppDir = new File("${project(':desktop').projectDir}/package/linux/Haveno.AppDir")
             File jpackDir = appDir
 
@@ -383,7 +383,7 @@ task packageInstallers {
 
                 project.exec {
                     workingDir appDir
-                    commandLine 'ln', '-s', 'bin/Haveno', 'AppRun'
+                    commandLine 'ln', '-s', 'bin/zeroswap', 'AppRun'
                 }
 
                 project.exec {
@@ -417,7 +417,7 @@ task packageInstallers {
             def filer = file('../core/src/main/java/haveno/core/app/HavenoExecutable.java')
             def content = filer.text
             def matcher = Pattern.compile(/public static final String DEFAULT_APP_NAME = "(.*?)";/).matcher(content)
-            def defaultAppName = "Haveno"
+            def defaultAppName = "zeroswap"
             if (matcher.find()) {
                 defaultAppName = matcher.group(1)
             } else {

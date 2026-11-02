@@ -8,7 +8,7 @@ mkdir -p .localnet/logs
 mkdir -p .localnet/pids
 
 echo "============================================="
-echo " Starting Haveno Localnet in Background...   "
+echo " Starting zeroswap Localnet in Background...   "
 echo "============================================="
 
 # 1. Monero Node 1 (port 28081)
@@ -74,7 +74,7 @@ else
         --useLocalhostForP2P=true \
         --useDevPrivilegeKeys=true \
         --nodePort=2002 \
-        --appName=haveno-XMR_LOCAL_Seed_2002 \
+        --appName=zeroswap-XMR_LOCAL_Seed_2002 \
         --xmrNode=http://localhost:28081 \
         < /dev/null > .localnet/logs/seednode.log 2>&1 &
     echo $! > .localnet/pids/seednode.pid

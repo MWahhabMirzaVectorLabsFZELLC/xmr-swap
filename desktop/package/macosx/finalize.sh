@@ -26,19 +26,19 @@ mkdir -p $target_dir
 # copied alongside the release. See docs/deployment-guide.md.
 cp "$target_dir/../../package/"*.asc "$target_dir/" 2>/dev/null || true
 
-dmg="Haveno-$version.dmg"
+dmg="zeroswap-$version.dmg"
 cp "$macos/$dmg" "$target_dir/"
 
 deb="haveno_$version-1_amd64.deb"
-deb64="Haveno-64bit-$version.deb"
+deb64="zeroswap-64bit-$version.deb"
 cp "$linux64/$deb" "$target_dir/$deb64"
 
 rpm="haveno-$version-1.x86_64.rpm"
-rpm64="Haveno-64bit-$version.rpm"
+rpm64="zeroswap-64bit-$version.rpm"
 cp "$linux64/$rpm" "$target_dir/$rpm64"
 
-exe="Haveno-$version.exe"
-exe64="Haveno-64bit-$version.exe"
+exe="zeroswap-$version.exe"
+exe64="zeroswap-64bit-$version.exe"
 cp "$win64/$exe" "$target_dir/$exe64"
 
 rpi="jar-lib-for-raspberry-pi-$version.zip"

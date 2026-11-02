@@ -4,13 +4,13 @@ runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.openjdk21
-command: /app/bin/Haveno
+command: /app/bin/zeroswap
 modules:
   - name: openjdk
     buildsystem: simple
     build-commands:
       - /usr/lib/sdk/openjdk21/install.sh
-  - name: Haveno
+  - name: zeroswap
     buildsystem: simple
     sources:
       # - type: git
@@ -31,7 +31,7 @@ modules:
       - ar x haveno.deb
       - tar xf data.tar.*
       - cp -r opt/haveno/lib /app/lib
-      - install -D opt/haveno/bin/Haveno /app/bin/Haveno
+      - install -D opt/zeroswap/bin/zeroswap /app/bin/zeroswap
       - mkdir -p /app/share/icons/hicolor/128x128/apps/
       - mkdir -p /app/share/applications/
       - mkdir -p /app/share/metainfo/

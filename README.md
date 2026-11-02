@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/haveno-dex/haveno-meta/721e52919b28b44d12b6e1e5dac57265f1c05cda/logo/haveno_logo_landscape.svg" alt="Haveno logo">
+  <h1>zeroswap</h1>
 
   [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/haveno-dex/haveno/build.yml?branch=master)](https://github.com/haveno-dex/haveno/actions)
   [![GitHub issues with bounty](https://img.shields.io/github/issues-search/haveno-dex/haveno?color=%23fef2c0&label=Issues%20with%20bounties&query=is%3Aopen+is%3Aissue+label%3A%F0%9F%92%B0bounty)](https://github.com/haveno-dex/haveno/issues?q=is%3Aopen+is%3Aissue+label%3A%F0%9F%92%B0bounty)
@@ -7,40 +7,40 @@
   [![Matrix rooms](https://img.shields.io/badge/Matrix%20room-%23haveno-blue)](https://matrix.to/#/#haveno:monero.social) [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](https://github.com/haveno-dex/.github/blob/master/CODE_OF_CONDUCT.md)
 </div>
 
-## What is Haveno?
+## What is zeroswap?
 
-Haveno (pronounced ha‧ve‧no) is an open source platform to exchange [Monero](https://getmonero.org) for fiat currencies like USD, EUR, and GBP or other cryptocurrencies like BTC, ETH, and BCH.
+zeroswap is an open source platform to exchange [Monero](https://getmonero.org) for fiat currencies like USD, EUR, and GBP or other cryptocurrencies like BTC, ETH, and BCH. It is based on the Haveno project.
 
 Main features:
 
 - Communications are routed through **Tor**, to preserve your privacy.
 
-- Trades are **peer-to-peer**: trades on Haveno happen between people only, there is no central authority.
+- Trades are **peer-to-peer**: trades on zeroswap happen between people only, there is no central authority.
 
-- Trades are **non-custodial**: Haveno supports arbitration in case something goes wrong during the trade, but arbitrators never have access to your funds.
+- Trades are **non-custodial**: zeroswap supports arbitration in case something goes wrong during the trade, but arbitrators never have access to your funds.
 
 - There is **No token**, because it's not needed. Transactions between traders are secured by non-custodial multisignature transactions on the Monero network.
 
 See the [FAQ on our website](https://haveno.exchange/faq/) for more information.
 
-## Haveno Demo
+## zeroswap Demo
 
 https://github.com/user-attachments/assets/edfb20b6-6f70-44d6-8989-5fc3bd70e0ce
 
-## Installing Haveno
+## Installing zeroswap
 
-Haveno can be installed on Linux, macOS, and Windows by using a third party installer and network.
+zeroswap can be installed on Linux, macOS, and Windows.
 
 > [!note]
-> The official Haveno repository does not support making real trades directly.
+> This fork is not ready for real trades until every requirement in [the production mainnet checklist](docs/production-mainnet-requirements.md) is complete.
 > 
-> To make real trades with Haveno, first find a third party network, and then use their installer or build their repository. We do not endorse any networks at this time.
+> Use stagenet or localnet for testing until production readiness has been approved.
 
-A test network is also available for users to make test trades using Monero's stagenet. See the [instructions](https://github.com/haveno-dex/haveno/blob/master/docs/installing.md) to build Haveno and connect to the test network.
+A test network is available for users to make test trades using Monero's stagenet. See the [instructions](docs/installing.md) to build zeroswap and connect to the test network.
 
 Alternatively, you can [create your own mainnet network](https://github.com/haveno-dex/haveno/blob/master/docs/create-mainnet.md).
 
-Note that Haveno is being actively developed. If you find issues or bugs, please let us know.
+Note that zeroswap and its Haveno base are actively developed. If you find issues or bugs, please let us know.
 
 ## Main repositories
 
