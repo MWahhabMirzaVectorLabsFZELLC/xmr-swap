@@ -136,7 +136,7 @@ public class FilterManager {
                     "02d3beb1293ca2ca14e6d42ca8bd18089a62aac62fd6bb23923ee6ead46ac60fba",
                     "0374dd70f3fa6e47ec5ab97932e1cec6233e98e6ae3129036b17118650c44fd3de");
         case XMR_MAINNET:
-            return List.of();
+            return List.of("022709457e6cb270c3b3b92fcda5359b0dfe48657b8865bcadf754d7e20ea6bee5");
         default:
             throw new RuntimeException("Unhandled base currency network: " + Config.baseCurrencyNetwork());
         }
