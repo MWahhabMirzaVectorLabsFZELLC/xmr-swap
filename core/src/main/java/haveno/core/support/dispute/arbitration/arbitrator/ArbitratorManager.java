@@ -76,7 +76,8 @@ public class ArbitratorManager extends DisputeAgentManager<Arbitrator> {
                     "02d3beb1293ca2ca14e6d42ca8bd18089a62aac62fd6bb23923ee6ead46ac60fba",
                     "03fa0f38f27bdd324db6f933f7e57851dadf3b911e4db6b19dd0950492c4525a31",
                     "02a1a458df5acf4ab08fdca748e28f33a955a30854c8c1a831ee733dca7f0d2fcd",
-                    "0374dd70f3fa6e47ec5ab97932e1cec6233e98e6ae3129036b17118650c44fd3de");
+                    "0374dd70f3fa6e47ec5ab97932e1cec6233e98e6ae3129036b17118650c44fd3de",
+                    "03e603f4f09fb2f47599b30582b7339ebe34df220138a8e41703e4474d9b53d3f7");
         case XMR_MAINNET:
             return List.of("02f5c9ac0c7b8c833fcfb28fcd51817e7641f0f584fee5d02c64be7999ce4b49a3");
         default:
