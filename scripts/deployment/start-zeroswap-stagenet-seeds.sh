@@ -20,6 +20,7 @@ start_seed() {
     local name="$1"
     local port="$2"
     local app_name="$3"
+    local peer_seed="$4"
     local pid_file="$PID_DIR/$name.pid"
     local log_file="$LOG_DIR/$name.log"
 
@@ -38,16 +39,18 @@ start_seed() {
         -classpath "$JAVA_CLASSPATH" \
         haveno.seednode.SeedNodeMain \
         --baseCurrencyNetwork=XMR_STAGENET \
-        --useLocalhostForP2P=false \
+        --useLocalhostForP2P=true \
         --useDevPrivilegeKeys=false \
         --nodePort="$port" \
+        --seedNodes="$peer_seed" \
         --appName="$app_name" \
         >"$log_file" 2>&1 &
     echo "$!" > "$pid_file"
     echo "Started $name on P2P port $port (PID $!). Log: $log_file"
 }
 
-start_seed "seed-1" 3002 "zeroswap-XMR_STAGENET_Seed_3002"
-start_seed "seed-2" 3003 "zeroswap-XMR_STAGENET_Seed_3003"
+start_seed "seed-1" 3002 "zeroswap-XMR_STAGENET_Seed_3002" "localhost:3003"
+start_seed "seed-2" 3003 "zeroswap-XMR_STAGENET_Seed_3003" "localhost:3002"
 
-echo "Wait for both logs to show Tor bootstrap and hidden-service publication before connecting clients."
+echo "This is a private same-computer test network. Point test clients to localhost:3002 and localhost:3003 with --useLocalhostForP2P=true."
+echo "Check both logs for successful P2P startup before connecting clients."

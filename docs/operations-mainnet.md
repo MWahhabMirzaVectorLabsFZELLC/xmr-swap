@@ -44,6 +44,8 @@ Run one arbitrator account per dedicated operator and host. Do not copy the same
 
 The script uses mainnet and loopback Monero RPC, but it is only a launch template. Operators must verify Tor/P2P connectivity, RPC credentials, firewall rules, disk protection, and restore recovery on stagenet before mainnet use.
 
+For isolated same-computer stagenet rehearsal, `scripts/deployment/start-zeroswap-stagenet-seeds.sh` runs two local-only P2P seed nodes. Test clients must use `XMR_STAGENET`, `--useLocalhostForP2P=true`, and `--seedNodes=localhost:3002,localhost:3003`. This rehearsal does not publish onion addresses and does not join the public stagenet P2P network.
+
 ## Key ceremony
 
 Generate every role key on an offline clean machine. Use a different key per role and custodian. Record only the public key, fingerprint, owner, backup owner, creation date, and rotation date in the inventory. Encrypt two offline backups and test recovery before activation. Two people must compare fingerprints before a code change is approved.
