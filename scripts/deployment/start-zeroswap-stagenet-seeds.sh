@@ -5,6 +5,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$REPO_ROOT/.localnet/logs/stagenet-seeds"
 PID_DIR="$REPO_ROOT/.localnet/pids/stagenet-seeds"
 LIB_DIR="$REPO_ROOT/lib"
+if command -v cygpath >/dev/null 2>&1; then
+    JAVA_CLASSPATH="$(cygpath -w "$LIB_DIR")\\*"
+else
+    JAVA_CLASSPATH="$LIB_DIR/*"
+fi
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
 if [[ ! -d "$LIB_DIR" ]]; then
@@ -30,7 +35,7 @@ start_seed() {
         -XX:+ExitOnOutOfMemoryError \
         -Djava.net.preferIPv4Stack=true \
         -Dfile.encoding=UTF-8 \
-        -classpath "$LIB_DIR/*" \
+        -classpath "$JAVA_CLASSPATH" \
         haveno.seednode.SeedNodeMain \
         --baseCurrencyNetwork=XMR_STAGENET \
         --useLocalhostForP2P=false \
