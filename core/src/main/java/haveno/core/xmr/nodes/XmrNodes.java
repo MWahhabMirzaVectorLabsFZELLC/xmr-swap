@@ -78,6 +78,11 @@ public class XmrNodes {
                     new XmrNode(MoneroNodesOption.PROVIDED, null, null, "45.63.8.26", 38081, 2, "@haveno"),
                     new XmrNode(MoneroNodesOption.PUBLIC, null, null, "node.sethforprivacy.com", 38089, 3, null),
                     new XmrNode(MoneroNodesOption.PUBLIC, null, null, "node2.sethforprivacy.com", 38089, 3, null),
+                    new XmrNode(MoneroNodesOption.PUBLIC, null, null, "node.monerodevs.org", 38089, 3, "@monerodevs.org"),
+                    new XmrNode(MoneroNodesOption.PUBLIC, null, null, "node2.monerodevs.org", 38089, 3, "@monerodevs.org"),
+                    new XmrNode(MoneroNodesOption.PUBLIC, null, null, "stagenet.xmr-tw.org", 38081, 3, "@xmr-tw"),
+                    new XmrNode(MoneroNodesOption.PUBLIC, null, null, "stagenet.xmr.kernal.eu", 38089, 3, "@kernal.eu"),
+                    new XmrNode(MoneroNodesOption.PUBLIC, null, null, "stagenet.xmr.kernal.eu", 38089, 3, "@kernal.eu", "https"),
                     new XmrNode(MoneroNodesOption.PUBLIC, null, "plowsof3t5hogddwabaeiyrno25efmzfxyro2vligremt7sxpsclfaid.onion", null, 38089, 3, null)
                 );
             case XMR_MAINNET:
