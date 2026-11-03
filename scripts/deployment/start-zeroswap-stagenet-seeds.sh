@@ -4,10 +4,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$REPO_ROOT/.localnet/logs/stagenet-seeds"
 PID_DIR="$REPO_ROOT/.localnet/pids/stagenet-seeds"
-SEEDNODE_LAUNCHER="$REPO_ROOT/seednode/build/install/seednode/bin/seednode"
+LIB_DIR="$REPO_ROOT/lib"
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
-if [[ ! -x "$SEEDNODE_LAUNCHER" ]]; then
+if [[ ! -d "$LIB_DIR" ]]; then
     "$REPO_ROOT/gradlew" :seednode:installDist
 fi
 
@@ -23,7 +23,15 @@ start_seed() {
         return
     fi
 
-    nohup "$SEEDNODE_LAUNCHER" \
+    nohup java \
+        -Xms512m \
+        -Xmx1g \
+        -XX:+UseG1GC \
+        -XX:+ExitOnOutOfMemoryError \
+        -Djava.net.preferIPv4Stack=true \
+        -Dfile.encoding=UTF-8 \
+        -classpath "$LIB_DIR/*" \
+        haveno.seednode.SeedNodeMain \
         --baseCurrencyNetwork=XMR_STAGENET \
         --useLocalhostForP2P=false \
         --useDevPrivilegeKeys=false \
