@@ -24,6 +24,26 @@ Mainnet cannot launch until the owner supplies and verifies:
 
 Private keys, seeds, passwords, and RPC credentials must never enter Git, CI logs, tickets, or chat.
 
+## Arbitrator software setup
+
+The current `zeroswap-arbitrator` public key is an **authorization key**. It lets its matching private key authorize an arbitrator account during registration. It is not the arbitrator operator's own account key. Each operator's zeroswap account creates its own account keys and must keep its own account data directory safe.
+
+The existing Haveno registration flow asks the operator to enter the authorization private key when registering. That means anyone who receives that private key can authorize an arbitrator account. Keep it only with the network owner and the specific operator during a planned registration; do not put it in `.env`, a seed server, a price server, or a committed config. Rotate the authorization key if it is exposed, then update the matching public key in every client release.
+
+On an operator machine with a synced private Monero mainnet node:
+
+1. Install the signed zeroswap desktop release and Tor.
+2. Create a protected environment file for `ZEROSWAP_XMR_RPC_USER` and `ZEROSWAP_XMR_RPC_PASSWORD`; allow only the arbitrator service account to read it.
+3. Copy `scripts/deployment/run-zeroswap-arbitrator-mainnet.sh` beside the installed `haveno-desktop` launcher and run it as the dedicated operator account.
+4. Create a new zeroswap account with a strong password. Do not reuse an upstream Haveno profile.
+5. Register from the Account screen only during an approved onboarding session. The operator creates and keeps the account keys; the network owner supplies the authorization private key for registration.
+6. Confirm the arbitrator appears in the network, restart once, and confirm it republishes and becomes visible again.
+7. Make an encrypted backup of the full zeroswap data directory and test restoring it on an isolated machine before accepting disputes.
+
+Run one arbitrator account per dedicated operator and host. Do not copy the same account data directory between operators. A systemd unit alone does not complete this setup: the arbitrator requires an initialized account, registration, a running desktop session, a synced Monero node, and a human available to handle disputes.
+
+The script uses mainnet and loopback Monero RPC, but it is only a launch template. Operators must verify Tor/P2P connectivity, RPC credentials, firewall rules, disk protection, and restore recovery on stagenet before mainnet use.
+
 ## Key ceremony
 
 Generate every role key on an offline clean machine. Use a different key per role and custodian. Record only the public key, fingerprint, owner, backup owner, creation date, and rotation date in the inventory. Encrypt two offline backups and test recovery before activation. Two people must compare fingerprints before a code change is approved.

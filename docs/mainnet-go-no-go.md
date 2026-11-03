@@ -16,9 +16,10 @@ Current result: **NO-GO**
 ## Blocking production inputs
 
 - [ ] Real mainnet seed onion addresses verified from another host
-- [ ] Four production public-key role lists populated and independently checked
+- [x] Four public-key role slots populated in source
+- [ ] Arbitrator authorization private key custody and rotation tested
 - [ ] Two or more approved price providers deployed and monitored
-- [ ] Arbitrators registered, trained, backed up, and tested
+- [ ] Arbitrator accounts registered, operators trained, backups restored, and disputes tested
 - [ ] Fee policy and pilot exposure caps approved by the owner
 - [ ] Official domain, downloads, docs, support, and security contacts live
 - [ ] External security audit findings closed or formally accepted

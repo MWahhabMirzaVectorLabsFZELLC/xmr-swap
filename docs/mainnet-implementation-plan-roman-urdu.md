@@ -221,6 +221,13 @@ Yeh plan sirf un kaamon ka hai jo main code, configuration, tests aur documentat
 - Dispute, custom award, missing deposit, extra deposit aur payout flows test karunga.
 - Arbitrator incident aur handover runbook banaunga.
 
+### Software setup ki had
+
+- Public authorization key app mein lagi hui hai. Is key ki private key arbitrator account registration ko authorize karti hai; yeh operator ke apne account keys nahi hain.
+- `scripts/deployment/run-zeroswap-arbitrator-mainnet.sh` GUI arbitrator ko mainnet aur loopback Monero RPC ke sath start karta hai.
+- Har operator ko apna alag zeroswap account/data folder banana aur backup restore test karna hoga.
+- Real dispute chalane ke liye operator, registered account, synced node aur human coverage ab bhi zaroori hain.
+
 ### Aapse kya chahiye
 
 - Kam az kam do trained arbitrator operators.
